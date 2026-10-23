@@ -1,0 +1,18 @@
+CREATE INDEX idx_sessions_user_expiry ON sessions(user_id, expires_at);
+CREATE INDEX idx_spaces_owner ON spaces(owner_id);
+CREATE UNIQUE INDEX uq_personal_space_owner ON spaces(owner_id) WHERE type='personal';
+CREATE INDEX idx_member_user ON space_members(user_id,space_id);
+CREATE INDEX idx_folders_children ON folders(space_id,parent_id,deleted_at,name);
+CREATE UNIQUE INDEX uq_folders_active_name ON folders(space_id,COALESCE(parent_id,''),name COLLATE NOCASE) WHERE deleted_at IS NULL;
+CREATE INDEX idx_files_folder ON files(space_id,folder_id,status,name);
+CREATE INDEX idx_files_object ON files(object_id);
+CREATE INDEX idx_files_recent ON files(space_id,created_at DESC);
+CREATE UNIQUE INDEX uq_files_active_name ON files(space_id,COALESCE(folder_id,''),name COLLATE NOCASE) WHERE status NOT IN ('trashed','deleted','failed');
+CREATE INDEX idx_object_status ON storage_objects(status,created_at);
+CREATE INDEX idx_upload_sessions_user ON upload_sessions(user_id,status,expires_at);
+CREATE INDEX idx_upload_expiration ON upload_sessions(status,expires_at);
+CREATE INDEX idx_shares_target ON shares(target_type,target_id);
+CREATE INDEX idx_share_access_share ON share_access(share_id,expires_at);
+CREATE INDEX idx_publications_source ON publications(source_file_id,status);
+CREATE INDEX idx_trash_purge ON trash_entries(purge_at,space_id);
+CREATE INDEX idx_audit_actor ON audit_logs(actor_id,created_at DESC);

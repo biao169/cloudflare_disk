@@ -1,0 +1,46 @@
+/* CloudDrive Stage 1 · Bootstrap extension only */
+:root { --sidebar-w: 244px; --accent:#4169dc; --surface:#f5f7fb; --edge:#e9edf3 }
+body { margin:0; font-family:system-ui,-apple-system,"Microsoft YaHei",sans-serif; background:var(--surface); color:var(--bs-body-color) }
+.app-shell { display:flex; min-height:100vh }
+.app-sidebar { width:var(--sidebar-w); flex:none; background:var(--bs-body-bg); padding:24px 14px; border-right:1px solid var(--edge); display:flex; flex-direction:column; position:sticky; height:100vh; top:0; z-index:40 }
+.brand { display:flex; align-items:center; gap:10px; color:var(--bs-body-color); font-weight:800; font-size:1.28rem; padding:0 10px 22px }
+.brand-mark { background:var(--accent); color:#fff; border-radius:13px; display:grid; place-items:center; width:36px; height:36px; font-size:22px }
+.sidebar-section-title { text-transform:uppercase; font-size:.68rem; font-weight:700; letter-spacing:.11em; color:#9ba5b3; padding:14px 12px 8px }
+.app-nav .nav-link { color:var(--bs-secondary-color); border-radius:10px; padding:11px 13px; font-size:.9rem; margin-bottom:3px; font-weight:500 }
+.app-nav .nav-link:hover { background:var(--bs-tertiary-bg); color:var(--bs-body-color) }
+.app-nav .nav-link.active { background:#e9efff; color:#315dc4; font-weight:700 }
+.nav-emoji { display:inline-block; width:24px; text-align:center; font-size:1.15rem }
+.sidebar-bottom { margin-top:auto; border-top:1px solid var(--edge); padding:18px 10px 0 }
+.tiny { font-size:.72rem }
+.app-main { flex:1; min-width:0 }
+.topbar { height:74px; display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid var(--edge); background:var(--bs-body-bg); padding:0 30px }
+.topbar-title { font-weight:700; font-size:1.05rem }
+.badge-stage { color:#6a53b5; background:#f1ebff; font-size:.67rem }
+.avatar { display:grid; place-items:center; background:#ebeff9; color:#4f64b0; font-size:.8rem; font-weight:bold; border-radius:50%; width:32px; height:32px }
+.content-wrap { max-width:1380px; margin:auto; padding:32px }
+.section-head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-bottom:26px }
+.muted-heading { color:var(--bs-secondary-color); font-size:.91rem }
+.panel { border:1px solid var(--edge); border-radius:16px; background:var(--bs-body-bg); box-shadow:0 4px 22px rgba(35,54,98,.028) }
+.stat-card { min-height:122px; padding:22px }
+.stat-card .value { font-size:1.7rem; font-weight:750; margin:5px 0 }
+.stat-card .label { font-size:.83rem; color:var(--bs-secondary-color) }
+.folder-tile { display:flex; align-items:center; gap:12px; border:1px solid var(--edge); border-radius:13px; padding:15px; background:var(--bs-body-bg); min-height:80px }
+.folder-icon { border-radius:11px; width:43px; height:43px; display:grid; place-items:center; background:#e9efff; color:#5079e4; font-size:1.35rem }
+.file-table { margin-bottom:0 }
+.file-table th { padding:15px 18px; font-size:.75rem; font-weight:650; color:var(--bs-secondary-color); white-space:nowrap; border-bottom-color:var(--edge) }
+.file-table td { padding:16px 18px; font-size:.875rem; vertical-align:middle; border-bottom-color:var(--edge) }
+.file-table tr:last-child td { border-bottom:0 }
+.file-symbol { display:inline-grid; place-items:center; background:#f0f3f8; border-radius:10px; width:36px; height:36px; margin-right:10px; font-size:1rem }
+.empty-state { padding:72px 20px; text-align:center }
+.empty-state .glyph { font-size:3rem; opacity:.55 }
+.btn-primary { background:#4169dc; border-color:#4169dc }
+.share-page { min-height:100vh; display:grid; place-items:center; padding:20px }
+.share-card { width:min(100%,430px); border-radius:16px }
+.mobile-backdrop { display:none }
+[data-bs-theme="dark"] { --surface:#121720; --edge:#2d3440 }
+[data-bs-theme="dark"] .app-nav .nav-link.active { background:#263a65; color:#b5c9ff }
+[data-bs-theme="dark"] .folder-icon { background:#2a3b60; color:#b2c7ff }
+[data-bs-theme="dark"] .badge-stage { background:#3d315f; color:#dec9ff }
+[data-bs-theme="dark"] .file-symbol { background:#303844 }
+@media(max-width:991px) { .app-sidebar { position:fixed; left:0; transform:translateX(-110%); transition:transform .2s; box-shadow:0 16px 40px #0002 } .app-sidebar.open {transform:none} .mobile-backdrop:not([hidden]) {display:block; position:fixed; inset:0; background:#0008; z-index:30} .topbar {padding:0 17px; height:62px} .content-wrap {padding:21px 15px} }
+@media(max-width:600px) { .section-head {align-items:stretch; flex-direction:column} .section-head .btn {align-self:flex-start} .file-table td:nth-child(n+3),.file-table th:nth-child(n+3) {display:none} .content-wrap {padding:18px 12px} .stat-card {min-height:100px; padding:16px} }

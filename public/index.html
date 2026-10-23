@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN" data-bs-theme="light">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="CloudDrive - 轻量级多人共享网盘">
+  <title>CloudDrive · 文件管理</title>
+  <link rel="stylesheet" href="/vendor/bootstrap/bootstrap.min.css">
+  <link rel="stylesheet" href="/css/app.css">
+  <script type="module" src="/js/main.js"></script>
+  <script defer src="/vendor/bootstrap/bootstrap.bundle.min.js"></script>
+<link rel="stylesheet" href="/css/preview.css">
+</head>
+<body>
+  <div class="app-shell" id="secure-shell" style="visibility:hidden">
+    <aside id="sidebar" class="app-sidebar">
+      <a href="/files" class="brand text-decoration-none" data-route="files"><span class="brand-mark">☁</span><span>CloudDrive</span></a>
+      <div class="sidebar-section-title">工作空间</div>
+      <nav class="nav flex-column app-nav" id="app-nav">
+        <a class="nav-link active" href="/files" data-route="files"><span class="nav-emoji">▦</span> 全部文件</a>
+        <a class="nav-link" href="/personal" data-route="personal"><span class="nav-emoji">♙</span> 个人空间</a>
+        <a class="nav-link" href="/spaces" data-route="spaces"><span class="nav-emoji">♧</span> 团队空间</a>
+        <a class="nav-link" href="/recent" data-route="recent"><span class="nav-emoji">◷</span> 最近文件</a>
+      </nav>
+      <div class="sidebar-section-title mt-4">管理</div>
+      <nav class="nav flex-column app-nav">
+        <a class="nav-link" href="/shares" data-route="shares"><span class="nav-emoji">↗</span> 我的分享</a>
+        <a class="nav-link" href="/trash" data-route="trash"><span class="nav-emoji">♲</span> 回收站</a>
+        <a class="nav-link" href="/users" data-route="users"><span class="nav-emoji">♧</span> 成员管理</a>
+        <a class="nav-link" href="/settings" data-route="settings"><span class="nav-emoji">⚙</span> 系统设置</a>
+      </nav>
+      <div class="sidebar-bottom"><div class="d-flex justify-content-between small mb-2"><span>存储空间</span><span>演示</span></div><div class="progress" style="height:6px"><div class="progress-bar" style="width:40%"></div></div><div class="text-muted tiny mt-2">V1 RC · 免费额度为应用级预警</div></div>
+    </aside>
+    <div class="app-main">
+      <header class="topbar">
+        <div class="d-flex align-items-center gap-2"><button class="btn btn-outline-secondary btn-sm d-lg-none" id="menu-button" aria-label="打开菜单">☰</button><span class="topbar-title" id="topbar-title">全部文件</span><span class="badge rounded-pill badge-stage">本地测试版</span></div>
+        <div class="d-flex gap-2 align-items-center"><button class="btn btn-sm btn-outline-secondary" id="theme-button" title="切换主题">◐</button><span class="avatar" title="当前用户">A</span></div>
+      </header>
+      <main id="app-content" class="content-wrap" tabindex="-1" aria-live="polite"></main>
+    </div>
+  </div>
+  <div id="mobile-backdrop" class="mobile-backdrop" hidden></div>
+  <div class="toast-container position-fixed bottom-0 end-0 p-3" id="toast-container"></div>
+</body>
+</html>

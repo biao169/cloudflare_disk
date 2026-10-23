@@ -1,0 +1,37 @@
+{
+  "name": "clouddrive",
+  "version": "1.0.0-rc.2",
+  "private": true,
+  "type": "module",
+  "description": "CloudDrive: no-build Bootstrap UI, Git-based Cloudflare Deploy button, D1 migrations and secure R2 sharing",
+  "scripts": {
+    "dev": "wrangler dev --local",
+    "check": "node scripts/check-syntax.mjs",
+    "test": "node --test tests/*.test.js",
+    "test:integration": "node --test tests/integration/*.test.js",
+    "test:all": "npm run check && npm test && npm run test:integration",
+    "deploy": "npm run db:migrate:remote && npm run deploy:code",
+    "db:migrate:local": "wrangler d1 migrations apply clouddrive-db --local",
+    "db:migrate:remote": "wrangler d1 migrations apply DB --remote",
+    "deploy:code": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  },
+  "cloudflare": {
+    "bindings": {
+      "DB": {
+        "description": "Stores users, permissions, uploads, shares, trash and audit metadata in D1."
+      },
+      "PRIVATE_BUCKET": {
+        "description": "Private R2 bucket. Do NOT enable r2.dev or a public custom domain for this bucket."
+      },
+      "PUBLIC_BUCKET": {
+        "description": "R2 bucket for deliberately public file copies. The Worker can serve them before a CDN domain is configured."
+      },
+      "BOOTSTRAP_TOKEN": {
+        "description": "Set a unique random secret (32+ characters, preferably 64 hexadecimal characters). Required only for the first super-admin account. Do NOT reuse the example placeholder or commit the token."
+      }
+    }
+  }
+}

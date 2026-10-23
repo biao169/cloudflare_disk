@@ -1,0 +1,4 @@
+# Copy to .dev.vars for local Wrangler testing, or supply as a secret in the
+# official Deploy to Cloudflare web deployment form. NEVER publish your real token.
+# CloudDrive rejects the literal placeholder shown below.
+BOOTSTRAP_TOKEN=REPLACE_WITH_A_UNIQUE_RANDOM_SECRET_AT_LEAST_32_CHARACTERS
