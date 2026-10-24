@@ -1,3 +1,4 @@
+import {readinessResponse} from './services/readiness.js';
 import {adminRoute} from './api/admin.js';
 import {trashRoute} from './api/trash.js';
 import {sharesRoute} from './api/shares.js';
@@ -12,7 +13,8 @@ import {DatabaseError} from './services/database.js';
 import {csrfAllowed} from './services/auth.js';
 export async function route(request,env){
  const {pathname}=new URL(request.url);
- if(pathname==='/api/v1/health'&&request.method==='GET')return ok({status:'ok',application:env.APP_NAME??'CloudDrive',stage:'stage-12',database:env.DB?'binding-present':'not-configured'});
+ if(pathname==='/api/v1/health/ready'&&request.method==='GET')return await readinessResponse(env);
+ if(pathname==='/api/v1/health'&&request.method==='GET')return ok({status:'ok',application:env.APP_NAME??'CloudDrive',stage:env.APP_STAGE??'stage-12',database:env.DB?'binding-present':'not-configured'});
  if(!pathname.startsWith('/api/'))return null;
  try{
   if(!['GET','HEAD','OPTIONS'].includes(request.method)&&!(await csrfAllowed(request)))return error('INVALID_ORIGIN','跨站请求被拒绝',403);

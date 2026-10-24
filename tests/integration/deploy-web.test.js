@@ -10,7 +10,9 @@ test('one-click deployment config declares both R2 buckets and D1 migration by b
  assert.equal(cfg.d1_databases[0].binding,'DB');
  assert.deepEqual(cfg.r2_buckets.map(x=>x.binding),['PRIVATE_BUCKET','PUBLIC_BUCKET']);
  assert.ok(cfg.assets.run_worker_first.includes('/p/*'));
- assert.match(pkg.scripts.deploy,/db:migrate:remote/);
+ assert.match(pkg.scripts.deploy,/deploy-cloudflare\.mjs/);
+ assert.equal(Object.hasOwn(cfg.d1_databases[0],'database_id'),false,'Do not commit a fake D1 database_id when auto-provisioning');
+ assert.match(pkg.scripts['deploy:upgrade'],/--upgrade/);
  assert.match(pkg.scripts['db:migrate:remote'],/migrations apply DB --remote/);
 });
 

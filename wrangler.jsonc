@@ -28,7 +28,7 @@
   },
   "vars": {
     "APP_NAME": "CloudDrive",
-    "APP_STAGE": "stage-12",
+    "APP_STAGE": "rc3-deploy-fix",
     "PUBLIC_BASE_URL": ""
   },
   "r2_buckets": [
@@ -50,7 +50,6 @@
     {
       "binding": "DB",
       "database_name": "clouddrive-db",
-      "database_id": "00000000-0000-0000-0000-000000000001",
       "migrations_dir": "migrations"
     }
   ]

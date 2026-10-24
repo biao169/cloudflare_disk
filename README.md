@@ -1,31 +1,49 @@
-# CloudDrive — Cloudflare 网页端一键部署（优先阅读）
+# CloudDrive V1 RC3 — Cloudflare 网页一键部署（无需前端编译）
 
-> 本项目没有 Vue/Vite 编译过程。Cloudflare 官方 **Deploy to Cloudflare** 支持从公开 GitHub/GitLab 仓库自动创建 Worker、D1 和 R2 Binding，并执行本项目的 D1 迁移。**仍需你首次填写安全的管理员初始化密钥，且需实际测量 Workers Free 10ms CPU 限额。** 此次已准备可部署的源码和配置，但尚未代表你创建 GitHub 仓库或部署到 Cloudflare。
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/biao169/cloudflare_disk)
 
-## 0.1 纯网页部署：准备仓库 → 点击部署
+**官方一键部署：** https://deploy.workers.cloudflare.com/?url=https://github.com/biao169/cloudflare_disk
 
-1. 解压本 ZIP，进入 `CloudDrive/`。在 [GitHub 创建公开仓库](https://github.com/new)（例如 `CloudDrive`），通过网页的 **Add file → Upload files** 上传 **`CloudDrive/` 文件夹里面的全部文件到仓库根目录**，而不是上传 ZIP。仓库根目录应直接包含 `package.json`、`wrangler.jsonc`、`worker/`、`public/`、`migrations/`。不要上传 `.dev.vars`、`.env`、`.wrangler/` 和真实账号密码。GitHub 网页上传可能存在单次文件数量限制，可分批上传；隐藏文件（如 `.dev.vars.example`）和 `.github/` 目录也应核对是否在仓库中。
-2. 在 Windows 上双击解压后 `CloudDrive/` 下的 **`deploy-link.html`**，粘贴刚建立的 **公开** GitHub/GitLab 仓库网址，点击“打开 Cloudflare 一键部署页面”。页面下方还可以生成安全的 `BOOTSTRAP_TOKEN`（256 位随机密钥），用于后续初始化管理员；整个过程不需要安装 Node.js。
-3. 也可直接把真实仓库 URL 替换到以下官方部署链接中的占位符后，在浏览器打开：
+源代码仓库：<https://github.com/biao169/cloudflare_disk>。项目采用 **HTML + Bootstrap + 原生 JavaScript + Cloudflare Worker**，无需 Vue、Vite、前端编译或单独构建命令。
 
-   ```text
-   https://deploy.workers.cloudflare.com/?url=https://github.com/你的用户名/你的公开仓库名
-   ```
+## 0.1 首次网页版部署（新 Cloudflare 账户）
 
-   仓库发布后，可将仓库 `README.md` 顶部换成你的真实地址并启用以下按钮格式：
+1. 打开上方 **Deploy to Cloudflare**，登录 Cloudflare/GitHub；确认仓库根目录含 `package.json`、`wrangler.jsonc`、`public/`、`worker/`、`migrations/`。
+2. 选择 Workers Free。启用 R2 服务可能需要先接受 Cloudflare 的计费/支付要求；不保证完全无费用。系统默认准备两个 R2 桶和一个 D1：
+   - `PRIVATE_BUCKET` → `clouddrive-private`（绝对不能开启公开访问）
+   - `PUBLIC_BUCKET` → `clouddrive-public`（只放主动发布的公开文件）
+   - `DB` → `clouddrive-db`
+3. **Build Command 留空**；**Deploy Command 设置为 `npm run deploy`**，**不要填 `npx wrangler deploy`**（后者不会自动执行数据库迁移）。该脚本会先检测现有 D1：已有可用数据库则先迁移后部署；首次资源尚未可用时先由 Wrangler 创建资源，再迁移 D1。
+4. 仔细确认部署日志最终含 **Worker published/deployed** 及迁移完成信息。日志显示静态文件上传、R2 桶创建、Binding 列表，**不代表整个部署结束**。
+5. 在 Cloudflare Dashboard → Workers & Pages → `clouddrive` → **Settings → Variables and Secrets**，添加 **Secret**：`BOOTSTRAP_TOKEN`，值为 32 字符以上的强随机字符串（不要填示例占位符，也不要提交 Git）。如果部署向导已询问并保存了该 Secret，则无需重复添加。
+6. 打开 `https://你的worker.workers.dev/api/v1/health/ready` 检查数据库与初始化状态。返回 `ADMIN_SETUP_REQUIRED` 表示可继续访问 `/login` 创建管理员；成功创建超级管理员后就绪检查应返回 `200 READY`。
+7. 首次管理员初始化完成后可删除或轮换 `BOOTSTRAP_TOKEN`。测试上传、预览、分享、下载和回收站。登录采用 PBKDF2-SHA256，需要在真实 Workers Free 环境验证 10 ms CPU 限额，**未验证前不要开放公众正式使用**。
 
-   ```markdown
-   [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/你的用户名/你的公开仓库名)
-   ```
+**Cloudflare 官方资料：** [Deploy to Cloudflare](https://developers.cloudflare.com/workers/platform/deploy-buttons/) · [自动资源配置](https://developers.cloudflare.com/changelog/post/2025-10-24-automatic-resource-provisioning/) · [D1 迁移](https://developers.cloudflare.com/d1/platform/client-api/)。
 
-4. 在官方部署页面登录 Cloudflare 和 GitHub，选择免费 Workers 计划（R2 是否能启用以及付款方式以 Cloudflare 控制台为准），检查 Worker 名、D1 数据库和两个 R2 桶。**Cloudflare 会根据仓库 `wrangler.jsonc` 自动配置这些资源和 Bindings**。本仓库 `package.json` 的 `deploy` 脚本会先按 `DB` Binding 执行 D1 的全部未应用 SQL 迁移，再部署 Worker。**不需要前端构建命令，Build Command 留空**；Deploy Command 选择/保持 `npm run deploy`。
-5. 如部署向导出现 `BOOTSTRAP_TOKEN`，将它填写为**自行生成的至少 32 个随机字符**，不要使用 `.dev.vars.example` 的占位值。若向导未要求，部署后访问 **Cloudflare Dashboard → Workers & Pages → clouddrive → Settings → Variables and Secrets → Add → Secret**，名称填 `BOOTSTRAP_TOKEN`，值填强随机字符串，并保存/部署新版本。不要把这个值写进 `wrangler.jsonc` 或公开仓库。
-6. 打开控制台展示的 `https://<worker>.<subdomain>.workers.dev/login`，首次按提示使用上述初始化密钥创建超级管理员；之后用管理员账号登录。初始化后从 Worker 变量和 Secrets 中**删除或轮换**一次性 `BOOTSTRAP_TOKEN`。私有桶的公开访问必须保持关闭。
-7. 部署后访问 `/api/v1/health` 和 `/files`；执行 [`docs/TEST_PLAN.md`](docs/TEST_PLAN.md) 的测试，重点测量登录、改密码、密码分享在 Workers Free 下是否出现 CPU 1102 错误。**若存在超限，不要开放公网实际使用；保留 PBKDF2 256 位哈希而不是降低安全性来掩盖错误。**
+## 0.2 从 Cloudflare 部署日志判断卡在哪一步
 
-**免费版默认链接策略：** 不配置任何域名也可创建公开文件直链，例如 `https://你的worker.workers.dev/p/文件发布ID`。这条回退直链每次访问都经过 Worker，受免费版每日请求额度约束；后续如配置 `clouddrive-public` 的 R2 自定义域名及 `PUBLIC_BASE_URL`，新发布的链接可走 R2/CDN。不要将私有 R2 桶绑定公开域名。
+| 现象 | 判断与处理 |
+|---|---|
+| `Uploaded ... assets` | 仅表示静态资源上传完毕，不能判断 Worker 已上线 |
+| `R2 Bucket provisioned` | R2 创建成功，不要重复创建桶 |
+| `env.DB (clouddrive-db)` | 仅证明绑定存在，不等于 D1 数据表完成迁移 |
+| `PUBLIC_BASE_URL ("")` | **不是错误**：未设置自定义 CDN 时使用 Worker `/p/{id}` 公开直链 |
+| `/api/v1/health` 返回 200 | 只代表 Worker 运行，不代表数据库就绪 |
+| `/api/v1/health/ready` 返回 `D1_MIGRATIONS_REQUIRED` | 检查部署命令是否为 `npm run deploy`，并核对 D1 迁移日志；可用 `npx wrangler d1 migrations apply DB --remote` 在已绑定数据库上执行迁移 |
+| 返回 `BOOTSTRAP_SECRET_REQUIRED` | 在 Worker 后台配置 Secret `BOOTSTRAP_TOKEN` |
+| 返回 `ADMIN_SETUP_REQUIRED` | 访问 `/login` 初始化第一位管理员 |
+| 返回 `READY` | 绑定与基础数据库初始化已通过；仍需浏览器实际测试 |
 
-**限制与真实状态：** 官方 Deploy Button 需要一个**真正存在、可访问的公开 Git 仓库**，ZIP 文件本身不能直接代替仓库 URL；如果没有你自己的仓库地址，这份代码里的按钮只能作为模板。自动创建资源/自动迁移同样不能替代部署后的安全验收。详见 [`docs/DEPLOY_WINDOWS_CLOUDFLARE.md`](docs/DEPLOY_WINDOWS_CLOUDFLARE.md) 和 [Cloudflare 官方 Deploy Button 文档](https://developers.cloudflare.com/workers/platform/deploy-buttons/)。
+详细诊断见 [`docs/DEPLOY_TROUBLESHOOTING.md`](docs/DEPLOY_TROUBLESHOOTING.md)。
+
+**升级已有 Cloudflare 实例：** 先备份生产 D1/R2，再执行 `npm run deploy:upgrade`（迁移先行）；如果远程数据库已存在且可列出迁移，默认 `npm run deploy` 也会先迁移。若数据库访问异常，不要把升级当作“首次部署”强行运行，防止短暂运行未迁移的新代码。
+
+**关于 D1 ID：** 本仓库不再提交假的 `database_id` UUID，使用 Wrangler 4.45+ 的资源自动配置。Cloudflare 自动部署会关联真实数据库；已有运行实例升级时需要核对 `DB` 仍然指向原数据库，**切勿创建同名的新数据库替代已有数据**。在 Windows 上手工管理 D1 时，按实际账户配置真实 ID。
+
+**注意：** 部署后还需要上传及登录测试。R2 公开直链 `PUBLIC_BASE_URL` 为空时通过 Worker `/p/{id}` 回退，不是阻断部署的配置项。
+
+---
 
 ## 0.2 Worker “128 位密码哈希”核查和登录密码长度
 
@@ -36,11 +54,11 @@
 
 ---
 
-# CloudDrive V1（RC2：网页版部署增强）
+# CloudDrive V1（RC3：自动部署和就绪诊断增强）
 
 一个轻量级的多人共享网盘，部署在 Cloudflare Workers Free，使用 **原生 HTML + Bootstrap 5 + ES Modules**；无需 Vue、Vite 或前端编译。后端是 JavaScript Worker，文件保存在 R2，目录和权限保存在 D1。
 
-> **发布状态：候选版本（RC），尚未获得 Windows 真正的 Wrangler/Miniflare 浏览器验收，也未执行任何真实 Cloudflare 账户部署。** 请完成 `docs/TEST_PLAN.md`，尤其验证 PBKDF2 登录是否满足 Workers Free 单次请求 CPU 额度，再用于公开生产环境。46 项 Node 单元测试与 12 项真实 SQLite + 模拟 R2 的 API 集成测试已通过，**不等同于 Cloudflare 线上测试**。
+> **发布状态：候选版本（RC），尚未获得 Windows 真正的 Wrangler/Miniflare 浏览器验收，也未执行任何真实 Cloudflare 账户部署。** 请完成 `docs/TEST_PLAN.md`，尤其验证 PBKDF2 登录是否满足 Workers Free 单次请求 CPU 额度，再用于公开生产环境。46 项 Node 单元测试与 18 项真实 SQLite + 模拟 R2 的 API 集成测试已通过，**不等同于 Cloudflare 线上测试**。
 
 ## 1. V1 功能（开发参考）
 

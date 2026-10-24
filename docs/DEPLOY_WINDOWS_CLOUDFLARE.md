@@ -1,19 +1,12 @@
-# Cloudflare 网页端一键自动部署（推荐）
+# Cloudflare 网页自动部署入口（RC3）
 
-官方入口：[Deploy to Cloudflare](https://developers.cloudflare.com/workers/platform/deploy-buttons/)。先将仓库根目录（含 `package.json`、`wrangler.jsonc`、`public/`、`worker/`、`migrations/`）上传到**公开** GitHub/GitLab 仓库，然后在 解压后 `CloudDrive/deploy-link.html` 输入真实仓库 URL 并打开官方部署页。
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/biao169/cloudflare_disk)
 
-- Cloudflare 读取 `wrangler.jsonc`，自动创建 `DB`（D1）和 `PRIVATE_BUCKET`、`PUBLIC_BUCKET`（R2）绑定及相应资源。为本账户开通 R2 可能需要完成服务和计费确认。
-- **Build Command 留空**（无需 Vue/Vite 构建），**Deploy Command 为 `npm run deploy`**。`package.json` 已配置 `wrangler d1 migrations apply DB --remote` 后再执行 `wrangler deploy`，新实例能够初始化数据库。现有真实数据升级应先备份 D1/R2，再确认迁移兼容性；不要无审查地对生产数据开启自动迁移。
-- 部署流程如果弹出 `BOOTSTRAP_TOKEN` 密钥输入框，填写自行生成的随机长令牌。否则部署后去 **Workers & Pages → 对应 Worker → Settings → Variables and Secrets → Add → Secret** 手动添加；切勿把真实令牌写入仓库。
-- 访问生成的 `workers.dev/login`，使用初始化密钥创建第一位超级管理员，然后删除/轮换令牌。
-- **没有自定义域名也支持公开直链**：新发布文件使用 Worker `/p/{id}` 路由（占用免费 Worker 请求）。如果设置 R2 公开桶自定义域名和 `PUBLIC_BASE_URL`，新的永久链接可直接经由 R2/CDN。私有桶不得公开。
-- 最后检查登录是否超过免费版单请求 10 ms CPU：当前 PBKDF2 为 100,000 次，尚未取得 Workers Free 的真实 CPU 测量结果。出现 1102 时暂停公网使用，不能随意用简单 SHA-256 替代密码 KDF。
+项目仓库：<https://github.com/biao169/cloudflare_disk>。Cloudflare 的 **Build Command 留空**，**Deploy Command 为 `npm run deploy`**，不要直接使用默认 `npx wrangler deploy`，否则可能跳过 D1 SQL 迁移。`scripts/deploy-cloudflare.mjs` 会根据远程 D1 的可用情况自动安排资源配置和迁移的顺序。
 
-**官方 Deploy Button URL 需真实公开仓库**，ZIP 不是 URL：
+成功部署后访问 `/api/v1/health/ready`，按返回的 `D1_MIGRATIONS_REQUIRED`、`BOOTSTRAP_SECRET_REQUIRED`、`ADMIN_SETUP_REQUIRED` 等状态完成配置。详细处理见 [DEPLOY_TROUBLESHOOTING.md](DEPLOY_TROUBLESHOOTING.md)。
 
-```text
-https://deploy.workers.cloudflare.com/?url=https://github.com/你的用户名/你的公开仓库名
-```
+**Cloudflare 自动部署**与下面的 **Windows 手工首次部署**是两种可选方式，不要在已经自动创建资源后重复执行创建命令，尤其不要用新的 D1 覆盖旧数据。
 
 ---
 
@@ -50,7 +43,7 @@ npx wrangler r2 bucket create clouddrive-public
 npx wrangler d1 create clouddrive-db
 ```
 
-3. 将创建 D1 时输出的**真实 UUID**写入 `wrangler.jsonc` 里的 `database_id`；勿保留 `00000000-0000-0000-0000-000000000001` 示例值。确保 Bucket 名称与 `r2_buckets` 匹配。
+3. 手工管理数据库时，应在 `wrangler.jsonc` 的 `d1_databases[0]` 中填入创建后返回的真实 `database_id`，或者让 Wrangler 4.45+ 完成自动资源绑定（本仓库默认不提交假 UUID）。确保 Bucket 名称与 `r2_buckets` 匹配。
 4. 在 Dashboard 中确认 `clouddrive-private` 没有公开域名或 `r2.dev` 开关，之后仍然保持私有。公网匿名访问必须只发生在 `clouddrive-public`。
 5. 为 Worker 保存初始化密钥（这里会交互式输入，不要将明文写入 Git）：
 
