@@ -1,3 +1,15 @@
+# CloudDrive V1 RC4 — 已部署实例修复与网页初始化（优先阅读）
+
+**已确认两项故障：** (1) Cloudflare `assets.html_handling` 的默认 HTML canonical redirect 导致 `/setup` 和 `/login` 无限重定向；(2) `/api/v1/health/ready` 报 `D1_MIGRATIONS_REQUIRED`，说明现有 D1 虽已绑定，但线上数据库尚未执行 SQL 迁移。
+
+**本版修复：** `wrangler.jsonc` 设置 `html_handling: none`，保留 Worker 内部的 HTML 映射，确保 `/setup`、`/login`、`/files` 和 `/s/*` 正常返回 HTML，而不再形成跳转循环。登录页可直接显示“D1 未迁移”或“缺少初始化 Secret”的诊断，而不是空白或提交无效表单。
+
+**现有账号的网页修复步骤：** 将本版推送至实际连接 Cloudflare 的仓库/分支；Dashboard → Workers & Pages → 当前 Worker → Settings → Builds：**Build Command 留空，Deploy Command 暂时设置为 `npm run deploy:upgrade`**。这样对已创建的 D1 执行远程迁移后再部署 Worker；不要再创建第二个 D1 或 R2 桶。部署成功后打开 <https://cloudflare-disk.2948531734.workers.dev/api/v1/health/ready>，若提示 `BOOTSTRAP_SECRET_REQUIRED`，到 Worker → Settings → Variables and Secrets 添加 `BOOTSTRAP_TOKEN` Secret（随机 32 字符以上）。随后访问 <https://cloudflare-disk.2948531734.workers.dev/setup>，输入管理员用户名、6–128 字符登录密码和初始化 Token。完成后可将 Deploy Command 改回 `npm run deploy`。如果远程迁移失败，不应继续初始化，应根据日志排查 D1 Binding 的真实数据库 ID。
+
+完整故障原因、诊断、网页恢复及 Windows 命令参考：[`docs/RC4_SETUP_RECOVERY.md`](docs/RC4_SETUP_RECOVERY.md)。
+
+---
+
 # CloudDrive V1 RC3 — Cloudflare 网页一键部署（无需前端编译）
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/biao169/cloudflare_disk)

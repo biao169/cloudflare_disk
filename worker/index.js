@@ -7,7 +7,22 @@ import {route,json} from './router.js';
 import {resolveUser} from './services/auth.js';
 
 const APP_PAGES=new Set(['/','/index.html','/files','/personal','/spaces','/recent','/shares','/trash','/users','/settings']);
-async function assetPage(request,env,page){const req=new Request(new URL(page,request.url),request);return protectHtml(await env.ASSETS.fetch(req));}
+// Static Assets default HTML canonicalization redirects /login.html -> /login.
+// Since /login is Worker-routed, that would become an infinite redirect loop.
+// wrangler.jsonc sets assets.html_handling='none' to serve these explicit files.
+async function assetPage(request,env,page){
+ const req=new Request(new URL(page,request.url),request);
+ const response=await env.ASSETS.fetch(req);
+ // Fail visibly rather than following a canonicalization redirect forever if the
+ // Wrangler setting is accidentally reverted during a future deployment.
+ if(response.status>=300&&response.status<400){
+  console.error('Unexpected HTML asset redirect',page,response.headers.get('Location'));
+  return new Response('CloudDrive HTML routing configuration error (assets.html_handling must be none)',{
+   status:500,headers:{'Content-Type':'text/plain; charset=utf-8','Cache-Control':'no-store'}
+  });
+ }
+ return protectHtml(response);
+}
 export default {
  async scheduled(event,env,ctx){ctx.waitUntil(Promise.allSettled([cleanupExpired(env),cleanupTrash(env),cleanupPendingStorage(env)]));},
  async fetch(request,env){

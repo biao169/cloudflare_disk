@@ -1,9 +1,9 @@
 {
   "name": "clouddrive",
-  "version": "1.0.0-rc.3",
+  "version": "1.0.0-rc.4",
   "private": true,
   "type": "module",
-  "description": "CloudDrive: no-build Workers web deploy, automatic resource provisioning, D1 migrations and verified readiness",
+  "description": "CloudDrive: safe static HTML routing, D1 readiness diagnostics, Cloudflare Worker and R2 file sharing",
   "scripts": {
     "dev": "wrangler dev --local",
     "check": "node scripts/check-syntax.mjs",

@@ -24,11 +24,12 @@
       "/trash",
       "/users",
       "/settings"
-    ]
+    ],
+    "html_handling": "none"
   },
   "vars": {
     "APP_NAME": "CloudDrive",
-    "APP_STAGE": "rc3-deploy-fix",
+    "APP_STAGE": "rc4-setup-fix",
     "PUBLIC_BASE_URL": ""
   },
   "r2_buckets": [
