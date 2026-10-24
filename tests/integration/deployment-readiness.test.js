@@ -1,14 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {api, makeTestEnv, initialize} from './support.js';
-import {deploymentOrder,explicitMode} from '../../scripts/deploy-cloudflare.mjs';
+import {parseMode, resolveDatabaseId} from '../../scripts/deploy-cloudflare.mjs';
 
-test('deploy command picks first-run provision before migration, upgrade migration before deployment',()=>{
-  assert.deepEqual(deploymentOrder('auto',false),['deploy:code','db:migrate:remote']);
-  assert.deepEqual(deploymentOrder('auto',true),['db:migrate:remote','deploy:code']);
-  assert.deepEqual(deploymentOrder('initial',true),['deploy:code','db:migrate:remote']);
-  assert.deepEqual(deploymentOrder('upgrade',false),['db:migrate:remote','deploy:code']);
-  assert.equal(explicitMode(['--upgrade']),'upgrade');
+test('deploy mode and D1 identity resolution protect existing databases',()=>{
+ assert.equal(parseMode([]),'auto');
+ assert.equal(parseMode(['--initial']),'initial');
+ assert.equal(parseMode(['--upgrade']),'upgrade');
+ assert.equal(parseMode(['--migrate-only']),'migrate-only');
+ assert.equal(resolveDatabaseId([], 'clouddrive-db'),null);
+ assert.equal(resolveDatabaseId([{name:'clouddrive-db',uuid:'12345678-1234-1234-1234-123456789abc'}], 'clouddrive-db'),'12345678-1234-1234-1234-123456789abc');
 });
 
 test('readiness warns when bindings are absent, rather than reporting a false healthy database',async()=>{

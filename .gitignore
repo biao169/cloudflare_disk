@@ -8,3 +8,7 @@ backups/
 coverage/
 *.sqlite
 *.db
+
+# Generated only during Cloudflare deployment; never commit account-specific D1 IDs.
+.cloudrive-deploy-*.jsonc
+.clouddrive-deploy-*.jsonc

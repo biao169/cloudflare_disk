@@ -1,6 +1,6 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "clouddrive",
+  "name": "cloudflare-disk",
   "main": "./worker/index.js",
   "compatibility_date": "2026-10-22",
   "assets": {
@@ -29,7 +29,7 @@
   },
   "vars": {
     "APP_NAME": "CloudDrive",
-    "APP_STAGE": "rc4-setup-fix",
+    "APP_STAGE": "rc5-auto-deploy",
     "PUBLIC_BASE_URL": ""
   },
   "r2_buckets": [

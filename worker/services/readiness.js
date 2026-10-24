@@ -2,7 +2,7 @@ import {json} from '../utils/response.js';
 
 // Deployment diagnostics. Does not reveal secret values, passwords, or object keys.
 // A binding being present does not mean that the D1 schema has been migrated.
-const REQUIRED_TABLES = [
+export const REQUIRED_TABLES = [
   'users', 'sessions', 'auth_attempts', 'spaces', 'folders', 'files',
   'storage_objects', 'upload_sessions', 'shares', 'trash_entries',
   'app_settings', 'storage_cleanup_jobs'

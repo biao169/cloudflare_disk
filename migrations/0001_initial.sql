@@ -1,4 +1,4 @@
-PRAGMA foreign_keys = ON;
+-- D1 enables foreign-key enforcement automatically; do not set PRAGMA foreign_keys inside its implicit transaction.
 CREATE TABLE users (
  id TEXT PRIMARY KEY, username TEXT NOT NULL COLLATE NOCASE UNIQUE, password_hash TEXT NOT NULL,
  role TEXT NOT NULL DEFAULT 'member' CHECK(role IN ('super_admin','member')),

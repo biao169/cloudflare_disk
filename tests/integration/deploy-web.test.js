@@ -13,7 +13,7 @@ test('one-click deployment config declares both R2 buckets and D1 migration by b
  assert.match(pkg.scripts.deploy,/deploy-cloudflare\.mjs/);
  assert.equal(Object.hasOwn(cfg.d1_databases[0],'database_id'),false,'Do not commit a fake D1 database_id when auto-provisioning');
  assert.match(pkg.scripts['deploy:upgrade'],/--upgrade/);
- assert.match(pkg.scripts['db:migrate:remote'],/migrations apply DB --remote/);
+ assert.match(pkg.scripts['db:migrate:remote'],/--migrate-only/);
 });
 
 test('published files work without a CDN domain on the Worker host; revocation invalidates them',async t=>{
