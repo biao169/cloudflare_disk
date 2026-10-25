@@ -29,7 +29,7 @@
   },
   "vars": {
     "APP_NAME": "CloudDrive",
-    "APP_STAGE": "rc5-auto-deploy",
+    "APP_STAGE": "rc9-operations",
     "PUBLIC_BASE_URL": ""
   },
   "r2_buckets": [
@@ -44,7 +44,7 @@
   ],
   "triggers": {
     "crons": [
-      "0 3 * * *"
+      "0 */6 * * *"
     ]
   },
   "d1_databases": [

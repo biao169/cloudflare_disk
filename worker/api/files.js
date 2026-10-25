@@ -27,10 +27,17 @@ export async function fileManagementRoute(req,env,path){
   if(parent&&!idOK(parent))return error('INVALID_INPUT','目录 ID 无效',400);
   if(!(await parentRight(db,user,spaceId,parent,'read')))return invisible();
   const limit=Math.min(100,Math.max(1,Number(q.get('limit'))||50));const offset=Math.min(10000,Math.max(0,Number(q.get('offset'))||0));
-  const folders=await many(db,'SELECT id,name,parent_id,created_at,updated_at FROM folders WHERE space_id=? AND parent_id IS ? AND deleted_at IS NULL ORDER BY name COLLATE NOCASE LIMIT ? OFFSET ?',[spaceId,parent,limit,offset]);
-  const accessible=[];for(const f of folders){const a=await folderAccess(db,user,f.id);if(canFolder(a,'read'))accessible.push(f)}
-  const files=await many(db,"SELECT id,name,folder_id,size_bytes,mime_type,status,created_at,updated_at FROM files WHERE space_id=? AND folder_id IS ? AND deleted_at IS NULL AND status='ready' ORDER BY name COLLATE NOCASE LIMIT ? OFFSET ?",[spaceId,parent,limit,offset]);
-  return ok({folders:accessible,files,parent_id:parent,limit,offset,has_more:folders.length===limit||files.length===limit});
+  // Sort expressions are constant allowlist entries: no user-supplied SQL identifiers.
+  const sort=q.get('sort')||'name_asc',filter=q.get('filter')||'all';
+  if(!['name_asc','name_desc','updated_desc','size_desc'].includes(sort)||!['all','images','videos','documents','other'].includes(filter))return error('INVALID_INPUT','排序或类型参数无效',400);
+  const folderOrder=sort==='name_desc'?'name COLLATE NOCASE DESC,id DESC':sort==='updated_desc'?'updated_at DESC,id DESC':'name COLLATE NOCASE ASC,id ASC';
+  const fileOrder={name_asc:'name COLLATE NOCASE ASC,id ASC',name_desc:'name COLLATE NOCASE DESC,id DESC',updated_desc:'updated_at DESC,id DESC',size_desc:'size_bytes DESC,id DESC'}[sort];
+  let folders=[];
+  if(filter==='all')folders=await many(db,`SELECT id,name,parent_id,created_at,updated_at FROM folders WHERE space_id=? AND parent_id IS ? AND deleted_at IS NULL ORDER BY ${folderOrder} LIMIT ? OFFSET ?`,[spaceId,parent,limit+1,offset]);
+  const accessible=[];for(const f of folders.slice(0,limit)){const a=await folderAccess(db,user,f.id);if(canFolder(a,'read'))accessible.push(f)}
+  const typeClause={all:'',images:" AND mime_type LIKE 'image/%'",videos:" AND mime_type LIKE 'video/%'",documents:" AND (mime_type='application/pdf' OR mime_type LIKE 'text/%' OR mime_type LIKE '%document%' OR mime_type LIKE '%spreadsheet%')",other:" AND mime_type NOT LIKE 'image/%' AND mime_type NOT LIKE 'video/%' AND mime_type!='application/pdf' AND mime_type NOT LIKE 'text/%' AND mime_type NOT LIKE '%document%' AND mime_type NOT LIKE '%spreadsheet%'"}[filter];
+  const files=await many(db,`SELECT id,name,space_id,folder_id,size_bytes,mime_type,status,created_at,updated_at FROM files WHERE space_id=? AND folder_id IS ? AND deleted_at IS NULL AND status='ready' ${typeClause} ORDER BY ${fileOrder} LIMIT ? OFFSET ?`,[spaceId,parent,limit+1,offset]);
+  return ok({folders:accessible,files:files.slice(0,limit),parent_id:parent,limit,offset,has_more:folders.length>limit||files.length>limit});
  }
  if(path==='/api/v1/search'&&method==='GET'){
   const sid=q.get('space_id'),term=(q.get('q')||'').trim();if(!idOK(sid)||term.length<1||term.length>100)return error('INVALID_INPUT','搜索参数无效',400);
@@ -76,11 +83,17 @@ export async function fileManagementRoute(req,env,path){
   }
  }
  if(path==='/api/v1/files/batch'&&method==='POST'){
-  const b=await jsonBody(req);if(!['move','copy'].includes(b?.operation)||!Array.isArray(b?.file_ids)||b.file_ids.length<1||b.file_ids.length>100||!b.file_ids.every(idOK))return error('INVALID_INPUT','批量参数无效',400);
-  if(new Set(b.file_ids).size!==b.file_ids.length)return error('INVALID_INPUT','存在重复文件 ID',400);
-  const results=[];for(const id of b.file_ids){const sub=b.operation==='rename'?'':`/${b.operation}`;const fake=new Request(req.url,{method:sub?'POST':'PATCH',headers:{'content-type':'application/json',cookie:req.headers.get('cookie')||'',origin:new URL(req.url).origin},body:JSON.stringify({target_folder_id:b.target_folder_id,...(b.operation==='rename'?{name:b.name}:{})})});
-   // Reuse the individual-file ACL checks; no implicit cross-space moves.
-   const r=await fileManagementRoute(fake,env,`/api/v1/files/${id}${sub}`);results.push({id,status:r.status,success:r.status<300});}
+  const b=await jsonBody(req),files=b?.file_ids??[],folders=b?.folder_ids??[];
+  if(!['move','copy'].includes(b?.operation)||!Array.isArray(files)||!Array.isArray(folders)||files.length+folders.length<1||files.length+folders.length>20||![...files,...folders].every(idOK)||new Set(files).size!==files.length||new Set(folders).size!==folders.length)return error('INVALID_INPUT','最多选择 20 个不同文件或文件夹',400);
+  if(b.operation==='copy'&&folders.length)return error('UNSUPPORTED','批量复制目录暂不支持，请单独选择文件',400);
+  if(b.target_folder_id!==null&&b.target_folder_id!==undefined&&!idOK(b.target_folder_id))return error('INVALID_INPUT','目标目录无效',400);
+  const results=[];
+  for(const [kind,ids] of [['file',files],['folder',folders]])for(const id of ids){
+   const where=kind==='file'?`/api/v1/files/${id}/${b.operation}`:`/api/v1/folders/${id}`;
+   const fake=new Request(req.url,{method:kind==='file'?'POST':'PATCH',headers:{'content-type':'application/json',cookie:req.headers.get('cookie')||'',origin:new URL(req.url).origin},body:JSON.stringify(kind==='file'?{target_folder_id:b.target_folder_id}: {parent_id:b.target_folder_id})});
+   const res=await fileManagementRoute(fake,env,where);
+   const parsed=await res.json();results.push({id,kind,status:res.status,success:res.ok,error:res.ok?null:parsed.error?.code});
+  }
   return ok({results,partial_failure:results.some(x=>!x.success)});
  }
  return error('NOT_FOUND','接口不存在',404);

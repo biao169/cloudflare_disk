@@ -1,7 +1,5 @@
 import {temporaryLink,publicPublishedFile} from './api/shares.js';
-import {cleanupTrash} from './services/trash.js';
-import {cleanupExpired} from './services/multipart.js';
-import {cleanupPendingStorage} from './services/cleanup.js';
+import {runMaintenance,recordIncident} from './services/operations.js';
 import {protectHtml} from './services/security-headers.js';
 import {route,json} from './router.js';
 import {resolveUser} from './services/auth.js';
@@ -24,14 +22,17 @@ async function assetPage(request,env,page){
  return protectHtml(response);
 }
 export default {
- async scheduled(event,env,ctx){ctx.waitUntil(Promise.allSettled([cleanupExpired(env),cleanupTrash(env),cleanupPendingStorage(env)]));},
+ async scheduled(event,env,ctx){ctx.waitUntil(runMaintenance(env,{source:'cron'}));},
  async fetch(request,env){
   try{
    const url=new URL(request.url),p=url.pathname;
-   const response=await route(request,env);if(response)return response;
+   const response=await route(request,env);if(response){
+    if(response.status>=500&&p!=='/api/v1/health/ready')await recordIncident(env,{source:'api.response',code:`HTTP_${response.status}`});
+    return response;
+   }
    if(p.startsWith('/api/'))return json({success:false,error:{code:'NOT_FOUND',message:'接口不存在'}},404);
-   if(p.startsWith('/t/'))return temporaryLink(request,env,p);
-   if(p.startsWith('/p/'))return publicPublishedFile(request,env,p);
+   if(p.startsWith('/t/')){const result=await temporaryLink(request,env,p);if(result.status>=500)await recordIncident(env,{source:'share.response',code:`HTTP_${result.status}`});return result;}
+   if(p.startsWith('/p/')){const result=await publicPublishedFile(request,env,p);if(result.status>=500)await recordIncident(env,{source:'share.response',code:`HTTP_${result.status}`});return result;}
    if(p.startsWith('/s/'))return assetPage(request,env,'/share.html');
    if(p==='/login'||p==='/setup')return assetPage(request,env,'/login.html');
    if(APP_PAGES.has(p)){
@@ -41,6 +42,6 @@ export default {
    }
    // Other static paths (Bootstrap, CSS and JavaScript) are served directly.
    return env.ASSETS.fetch(request);
-  }catch(e){console.error('Unhandled request failure',e);return json({success:false,error:{code:'INTERNAL_ERROR',message:'服务器请求失败'}},500);}
+  }catch(e){console.error('Unhandled request failure',e);await recordIncident(env,{source:'worker',code:'UNHANDLED_REQUEST'});return json({success:false,error:{code:'INTERNAL_ERROR',message:'服务器请求失败'}},500);}
  }
 };

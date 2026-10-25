@@ -13,12 +13,111 @@ export const MAX_PARTS=10000;
 const STATUS={uploading:'uploading',completed:'completed',aborted:'aborted'};
 export function choosePartSize(bytes){return Math.max(DEFAULT_PART,Math.ceil(bytes/MAX_PARTS/MiB)*MiB);}
 export function validPartLayout(total,part){return Number.isSafeInteger(total)&&total>0&&total<=MAX_TOTAL&&Number.isSafeInteger(part)&&part>=MIN_PART&&part<=MAX_PART&&Math.ceil(total/part)<=MAX_PARTS;}
-function sessionPublic(s,parts=[]){return {id:s.id,file_name:s.file_name,space_id:s.space_id,target_folder_id:s.target_folder_id,total_bytes:s.total_bytes,part_size:s.part_size,status:s.status,expires_at:s.expires_at,parts:parts.map(p=>({part_number:p.part_number,size_bytes:p.size_bytes}))};}
+function sessionPublic(s,parts=[]){return {id:s.id,file_name:s.file_name,space_id:s.space_id,target_folder_id:s.target_folder_id,total_bytes:s.total_bytes,part_size:s.part_size,status:s.status,expires_at:s.expires_at,recovery_error:s.recovery_error||null,recovery_attempts:s.recovery_attempts||0,parts:parts.map(p=>({part_number:p.part_number,size_bytes:p.size_bytes}))};}
 async function session(db,id,user){return one(db,'SELECT * FROM upload_sessions WHERE id=? AND user_id=?',[id,user.id]);}
 async function getParts(db,id){return many(db,'SELECT part_number,etag,size_bytes FROM upload_parts WHERE upload_session_id=? ORDER BY part_number',[id]);}
 function active(s){return s.status===STATUS.uploading&&Date.parse(s.expires_at.replace(' ','T')+'Z')>Date.now();}
-async function release(db,s){await execute(db,'UPDATE spaces SET reserved_bytes=MAX(0,reserved_bytes-?) WHERE id=?',[s.reserved_bytes,s.space_id]);}
-async function expire(db,bucket,s){try{await bucket.resumeMultipartUpload(s.object_key,s.r2_upload_id).abort();}catch(e){console.warn('Multipart abort failed',s.id,e)}await execute(db,"UPDATE upload_sessions SET status='aborted',updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='uploading'",[s.id]);await release(db,s);}
+const STALE_SECONDS=120;
+function stale(s){return (Date.now()-Date.parse(s.updated_at.replace(' ','T')+'Z'))>=STALE_SECONDS*1000;}
+async function markAborted(db,s){
+ await db.batch([
+  db.prepare("UPDATE spaces SET reserved_bytes=MAX(0,reserved_bytes-?) WHERE id=?").bind(s.reserved_bytes,s.space_id),
+  db.prepare("UPDATE upload_sessions SET status='aborted',reserved_bytes=0,updated_at=CURRENT_TIMESTAMP WHERE id=? AND status!='completed'").bind(s.id)
+ ]);
+}
+async function abortUncompleted(env,db,s){
+ // Never release reservation when R2 abort has failed: retry is safer than
+ // silently leaving storage occupied without accounting for it.
+ try{await storageBinding(env).resumeMultipartUpload(s.object_key,s.r2_upload_id).abort();}
+ catch(e){
+  // R2 automatically aborts incomplete multipart uploads after seven days.
+  // Only after an additional safety day AND confirming no completed object may
+  // we release a reservation even when the original upload ID no longer exists.
+  const age=Date.now()-Date.parse(s.created_at.replace(' ','T')+'Z');
+  if(age>8*86400000){
+   try{if(!await storageBinding(env).head(s.object_key)){await markAborted(db,s);return true;}}catch{}
+  }
+  console.warn('Multipart abort deferred',s.id,e);return false;
+ }
+ await markAborted(db,s);return true;
+}
+async function queueOrphan(env,db,s,reason){
+ // A completed orphan is physical R2 storage. Keep reserved bytes charged until
+ // durable cleanup confirms that the object is actually deleted.
+ await db.batch([
+  db.prepare(`INSERT OR IGNORE INTO storage_cleanup_jobs
+   (id,object_id,object_key,bucket_type,space_id,size_bytes,reserved_release_bytes,upload_session_id)
+   VALUES(?,?,?,'private',?,0,?,?)`).bind(uuid(),`upload-${s.id}`,s.object_key,s.space_id,s.reserved_bytes,s.id),
+  db.prepare("UPDATE upload_sessions SET status='aborted',recovery_error=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND status!='completed'").bind(reason.slice(0,300),s.id)
+ ]);
+}
+async function finalizeCompletedObject(db,s,obj,userId){
+ if(obj.size!==s.total_bytes)throw new Error('Completed R2 object size mismatch');
+ // The logical destination and account permissions must still be valid.
+ const uploader=await one(db,'SELECT id,role,status FROM users WHERE id=?',[userId]);
+ if(!uploader||uploader.status!=='active'||!await destinationAllowed(db,uploader,s.space_id,s.target_folder_id))throw new Error('UPLOAD_PERMISSION_REVOKED');
+ const collision=await one(db,"SELECT id FROM files WHERE space_id=? AND folder_id IS ? AND name=? COLLATE NOCASE AND deleted_at IS NULL AND status!='deleted'",[s.space_id,s.target_folder_id,s.file_name]);
+ if(collision)throw new Error('UPLOAD_NAME_CONFLICT');
+ const objectId=uuid(),fileId=uuid();
+ await db.batch([
+  db.prepare("INSERT INTO storage_objects(id,bucket_type,object_key,size_bytes,etag,status) VALUES(?,'private',?,?,?,'ready')").bind(objectId,s.object_key,s.total_bytes,obj.etag||null),
+  db.prepare("INSERT INTO files(id,space_id,folder_id,name,object_id,size_bytes,mime_type,status,created_by) VALUES(?,?,?,?,?,?,?,'ready',?)").bind(fileId,s.space_id,s.target_folder_id,s.file_name,objectId,s.total_bytes,s.mime_type,userId),
+  db.prepare('UPDATE spaces SET reserved_bytes=MAX(0,reserved_bytes-?),used_bytes=used_bytes+? WHERE id=?').bind(s.reserved_bytes,s.total_bytes,s.space_id),
+  db.prepare("UPDATE upload_sessions SET status='completed',reserved_bytes=0,recovery_error=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=? AND status IN ('verifying','failed')").bind(s.id)
+ ]);
+ return fileId;
+}
+function completeParts(s,parts){
+ const count=Math.ceil(s.total_bytes/s.part_size);
+ if(parts.length!==count||parts.some((p,i)=>p.part_number!==i+1||p.size_bytes!==(i===count-1?s.total_bytes-s.part_size*i:s.part_size)))return null;
+ return parts.map(p=>({partNumber:p.part_number,etag:p.etag}));
+}
+async function storedFileForUpload(db,s){
+ return one(db,'SELECT f.id FROM files f JOIN storage_objects o ON o.id=f.object_id WHERE o.object_key=? LIMIT 1',[s.object_key]);
+}
+export async function recoverSession(env,s,{retryComplete=true}={}){
+ const db=dbFromEnv(env),bucket=storageBinding(env);
+ if(s.status==='completed')return {status:'completed',file_id:(await storedFileForUpload(db,s))?.id||null};
+ if(!['verifying','failed'].includes(s.status))return {status:s.status};
+ if(s.status==='verifying'&&!stale(s))return {status:'verifying',waiting:true};
+ const previous=await storedFileForUpload(db,s);
+ if(previous){
+  // Partial database failure is highly unlikely because D1.batch is atomic,
+  // but never create another logical file for an object that already has one.
+  await db.batch([
+   db.prepare('UPDATE spaces SET reserved_bytes=MAX(0,reserved_bytes-?) WHERE id=?').bind(s.reserved_bytes,s.space_id),
+   db.prepare("UPDATE upload_sessions SET status='completed',reserved_bytes=0,recovery_error=NULL WHERE id=?").bind(s.id)
+  ]);
+  return {status:'completed',file_id:previous.id};
+ }
+ const expired=Date.parse(s.expires_at.replace(' ','T')+'Z')<=Date.now();
+ let obj=await bucket.head(s.object_key); // A head failure must NOT be treated as missing bytes.
+ if(!obj&&retryComplete&&!expired){
+  const parts=await getParts(db,s.id),completion=completeParts(s,parts);
+  if(completion){
+   try{obj=await bucket.resumeMultipartUpload(s.object_key,s.r2_upload_id).complete(completion);}
+   catch(e){console.warn('R2 multipart retry deferred',s.id,e?.message||e);}
+  }
+ }
+ if(obj){
+  try{const fileId=await finalizeCompletedObject(db,s,obj,s.user_id);return {status:'completed',file_id:fileId};}
+  catch(e){
+   const reason=String(e?.message||e).slice(0,300);
+   await execute(db,"UPDATE upload_sessions SET status='failed',recovery_error=?,recovery_attempts=recovery_attempts+1,updated_at=CURRENT_TIMESTAMP WHERE id=? AND status IN ('verifying','failed')",[reason,s.id]);
+   if(expired&&['UPLOAD_PERMISSION_REVOKED','UPLOAD_NAME_CONFLICT','Completed R2 object size mismatch'].includes(reason)){
+    await queueOrphan(env,db,s,reason);
+    return {status:'aborted',cleanup_queued:true};
+   }
+   return {status:'failed',reason};
+  }
+ }
+ if(expired){
+  const aborted=await abortUncompleted(env,db,s);
+  return {status:aborted?'aborted':s.status,retry_needed:!aborted};
+ }
+ await execute(db,"UPDATE upload_sessions SET status='failed',recovery_attempts=recovery_attempts+1,recovery_error='R2 multipart object not completed',updated_at=CURRENT_TIMESTAMP WHERE id=? AND status IN ('verifying','failed')",[s.id]);
+ return {status:'failed',retry_needed:true};
+}
 export async function initiate(req,env,user){
  const data=await req.json().catch(()=>null),db=dbFromEnv(env),bucket=storageBinding(env);
  const {name,space_id:spaceId,folder_id:folderId=null,size_bytes:size,mime_type:mime='application/octet-stream'}=data||{};
@@ -37,7 +136,7 @@ export async function initiate(req,env,user){
  }catch(e){console.error('initiate multipart',e);if(upload)await upload.abort().catch(()=>{});await execute(db,'UPDATE spaces SET reserved_bytes=MAX(0,reserved_bytes-?) WHERE id=?',[size,spaceId]);return error('UPLOAD_FAILED','无法创建上传会话',503)}
 }
 export async function status(env,user,id){const db=dbFromEnv(env),s=await session(db,id,user);if(!s)return error('NOT_FOUND','任务不存在',404);return ok(sessionPublic(s,await getParts(db,id)));}
-export async function list(env,user){const db=dbFromEnv(env);const rows=await many(db,"SELECT * FROM upload_sessions WHERE user_id=? AND status='uploading' ORDER BY created_at DESC LIMIT 50",[user.id]);return ok({items:rows.map(s=>sessionPublic(s))});}
+export async function list(env,user){const db=dbFromEnv(env);const rows=await many(db,"SELECT * FROM upload_sessions WHERE user_id=? AND status IN ('uploading','verifying','failed') ORDER BY created_at DESC LIMIT 50",[user.id]);return ok({items:rows.map(s=>sessionPublic(s))});}
 export async function part(req,env,user,id,n){
  const db=dbFromEnv(env),bucket=storageBinding(env),s=await session(db,id,user),number=Number(n);
  if(!s)return error('NOT_FOUND','任务不存在',404);if(!active(s))return error('UPLOAD_EXPIRED','上传任务过期或已结束',409);
@@ -55,35 +154,58 @@ export async function part(req,env,user,id,n){
 export async function complete(env,user,id){
  const db=dbFromEnv(env),bucket=storageBinding(env),s=await session(db,id,user);
  if(!s)return error('NOT_FOUND','任务不存在',404);
- if(s.status==='completed'){const file=await one(db,'SELECT id FROM files WHERE object_id=(SELECT id FROM storage_objects WHERE object_key=?)',[s.object_key]);return ok({file_id:file?.id,status:'completed'});}
+ if(s.status==='completed')return ok({file_id:(await storedFileForUpload(db,s))?.id,status:'completed'});
+ if(s.status==='failed')return recover(env,user,id);
  if(!active(s))return error('UPLOAD_EXPIRED','上传任务过期或已结束',409);
  if(!await destinationAllowed(db,user,s.space_id,s.target_folder_id))return error('FORBIDDEN','上传权限已撤销',403);
- const parts=await getParts(db,id),count=Math.ceil(s.total_bytes/s.part_size);
- if(parts.length!==count||parts.some((p,i)=>p.part_number!==i+1||p.size_bytes!==(i===count-1?s.total_bytes-s.part_size*i:s.part_size)))return error('INCOMPLETE','仍有未完成分片',409);
+ const parts=await getParts(db,id),completeList=completeParts(s,parts);
+ if(!completeList)return error('INCOMPLETE','仍有未完成分片',409);
  if(await one(db,"SELECT id FROM files WHERE space_id=? AND folder_id IS ? AND name=? COLLATE NOCASE AND deleted_at IS NULL AND status!='deleted'",[s.space_id,s.target_folder_id,s.file_name]))return error('NAME_CONFLICT','存在同名文件，请先处理',409);
- // Claim completion; avoid two concurrent completes of the same upload.
  const claimed=await execute(db,"UPDATE upload_sessions SET status='verifying',updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='uploading'",[id]);
  if(!claimed.meta?.changes)return error('BUSY','合并已经开始，请查询状态',409);
  try{
-  const object=await bucket.resumeMultipartUpload(s.object_key,s.r2_upload_id).complete(parts.map(p=>({partNumber:p.part_number,etag:p.etag})));
-  if(object.size!==s.total_bytes)throw new Error('Multipart object size mismatch');
-  const objectId=uuid(),fileId=uuid();
-  await db.batch([
-   db.prepare("INSERT INTO storage_objects(id,bucket_type,object_key,size_bytes,etag,status) VALUES(?,'private',?,?,?,'ready')").bind(objectId,s.object_key,s.total_bytes,object.etag||null),
-   db.prepare("INSERT INTO files(id,space_id,folder_id,name,object_id,size_bytes,mime_type,status,created_by) VALUES(?,?,?,?,?,?,?,'ready',?)").bind(fileId,s.space_id,s.target_folder_id,s.file_name,objectId,s.total_bytes,s.mime_type,user.id),
-   db.prepare('UPDATE spaces SET reserved_bytes=MAX(0,reserved_bytes-?),used_bytes=used_bytes+? WHERE id=?').bind(s.reserved_bytes,s.total_bytes,s.space_id),
-   db.prepare("UPDATE upload_sessions SET status='completed',reserved_bytes=0,updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(id)
-  ]);
+  const object=await bucket.resumeMultipartUpload(s.object_key,s.r2_upload_id).complete(completeList);
+  const fileId=await finalizeCompletedObject(db,s,object,user.id);
   return ok({file_id:fileId,status:'completed'},201);
- }catch(e){console.error('multipart completion',e);
-  // Storage may already have completed; never automatically return to uploading or remove reservation.
-  await execute(db,"UPDATE upload_sessions SET status='failed',updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='verifying'",[id]).catch(()=>{});
-  return error('COMPLETE_FAILED','完成失败，请联系管理员核查存储状态，勿重新上传该任务',503);
+ }catch(e){
+  console.error('Multipart completion needs recovery',id,e?.message||e);
+  await execute(db,"UPDATE upload_sessions SET status='failed',recovery_error=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='verifying'",[String(e?.message||e).slice(0,300),id]).catch(()=>{});
+  return error('COMPLETE_FAILED','完成过程被中断：文件可能已写入 R2，可使用恢复功能核对，切勿重复上传',503);
  }
 }
-export async function cancel(env,user,id){const db=dbFromEnv(env),bucket=storageBinding(env),s=await session(db,id,user);if(!s)return error('NOT_FOUND','任务不存在',404);if(s.status==='aborted')return ok({status:'aborted'});if(s.status!=='uploading')return error('INVALID_STATE','此任务不能取消',409);
- const claimed=await execute(db,"UPDATE upload_sessions SET status='aborted',updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='uploading'",[id]);if(!claimed.meta?.changes)return error('BUSY','任务状态已变化',409);
- await bucket.resumeMultipartUpload(s.object_key,s.r2_upload_id).abort().catch(e=>console.error('Multipart abort needs cleanup',e));
- await release(db,s);await execute(db,'UPDATE upload_sessions SET reserved_bytes=0 WHERE id=?',[id]);return ok({status:'aborted'});
+export async function recover(env,user,id){
+ const db=dbFromEnv(env),s=await session(db,id,user);
+ if(!s)return error('NOT_FOUND','任务不存在',404);
+ if(!['failed','verifying','completed'].includes(s.status))return error('INVALID_STATE','该任务无需恢复',409);
+ const result=await recoverSession(env,s);
+ if(result.waiting)return error('RECOVERY_BUSY','正在合并，请稍后再试',409);
+ if(result.status==='completed')return ok(result);
+ if(result.status==='aborted')return ok(result);
+ return error('RECOVERY_PENDING','服务器尚未完成恢复，将由定时任务继续处理；请勿重新上传此任务',503);
 }
-export async function cleanupExpired(env){const db=dbFromEnv(env),bucket=storageBinding(env);const rows=await many(db,"SELECT * FROM upload_sessions WHERE status='uploading' AND expires_at<CURRENT_TIMESTAMP LIMIT 30");for(const s of rows)await expire(db,bucket,s);return rows.length;}
+export async function cancel(env,user,id){
+ const db=dbFromEnv(env),s=await session(db,id,user);if(!s)return error('NOT_FOUND','任务不存在',404);
+ if(s.status==='aborted')return ok({status:'aborted'});
+ if(s.status==='completed')return error('INVALID_STATE','文件已经完成上传，无法取消',409);
+ if(s.status==='verifying'&&!stale(s))return error('BUSY','文件仍在合并，暂时不能取消',409);
+ const bucket=storageBinding(env);
+ // Completed objects are possible even when the session is marked failed.
+ const obj=await bucket.head(s.object_key);
+ if(obj){await queueOrphan(env,db,s,'Cancelled completed orphan');return ok({status:'aborted',cleanup_queued:true});}
+ const aborted=await abortUncompleted(env,db,s);
+ return aborted?ok({status:'aborted'}):error('ABORT_RETRY','取消请求已收到，R2 暂时不可用，将自动重试',503);
+}
+export async function cleanupExpired(env,{limit=8}={}){
+ const db=dbFromEnv(env);
+ const rows=await many(db,"SELECT * FROM upload_sessions WHERE (status='uploading' AND expires_at<CURRENT_TIMESTAMP) OR (status IN ('verifying','failed') AND (expires_at<CURRENT_TIMESTAMP OR updated_at<datetime('now','-2 minutes'))) ORDER BY updated_at LIMIT ?",[Math.max(1,Math.min(8,limit))]);
+ let cleaned=0,pending=0;
+ for(const s of rows){
+  try{
+   const result=s.status==='uploading'?(await storageBinding(env).head(s.object_key)?
+    (await queueOrphan(env,db,s,'Expired upload has an unexpected completed R2 object'),{status:'aborted'}):
+    {status:await abortUncompleted(env,db,s)?'aborted':'uploading'}):await recoverSession(env,s);
+   if(['aborted','completed'].includes(result.status))cleaned++;else pending++;
+  }catch(e){pending++;console.warn('Upload recovery deferred',s.id,e?.message||e);}
+ }
+ return {attempted:rows.length,cleaned,pending};
+}

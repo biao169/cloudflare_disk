@@ -4,6 +4,7 @@ import {randomToken,sha256,passwordHash,checkPassword} from './auth.js';
 import {ok,error} from '../utils/response.js';
 import {matchesPreviewSignature,DEFAULT_QUOTA_BYTES} from './storage.js';
 import {RESERVE_SQL,settings} from './admin.js';
+import {encryptShareCode,linkKeyStatus,sharePath} from './share-links.js';
 
 export const SHARE_CODE=/^[a-f0-9]{48,64}$/;
 export function validShareCode(code){return SHARE_CODE.test(code||'');}
@@ -13,12 +14,14 @@ export async function target(db,user,type,id){
  if(type==='file'){
   const f=await one(db,"SELECT * FROM files WHERE id=? AND status='ready' AND deleted_at IS NULL",[id]);if(!f)return null;
   const a=await spaceAccess(db,user,f.space_id);if(!a)return null;
-  const permitted=f.folder_id?canFolder(await folderAccess(db,user,f.folder_id),'share'):canSpace(a,'share');
+  const rights=f.folder_id?await folderAccess(db,user,f.folder_id):null;
+  const permitted=f.folder_id?(canFolder(rights,'share')&&canFolder(rights,'read')):(canSpace(a,'share')&&canSpace(a,'read'));
   return permitted?{...f,type}:null;
  }
  if(type==='folder'){
   const f=await one(db,'SELECT * FROM folders WHERE id=? AND deleted_at IS NULL',[id]);if(!f)return null;
-  return canFolder(await folderAccess(db,user,f.id),'share')?{...f,type}:null;
+  const rights=await folderAccess(db,user,f.id);
+  return canFolder(rights,'share')&&canFolder(rights,'read')?{...f,type}:null;
  }
  return null;
 }
@@ -26,10 +29,20 @@ export async function resolveShare(db,code){
  if(!validShareCode(code))return null;
  const s=await one(db,'SELECT * FROM shares WHERE share_code_hash=?',[await sha256(code)]);
  if(!shareIsActive(s))return null;
- const found=await one(db,s.target_type==='file'?"SELECT id FROM files WHERE id=? AND status='ready' AND deleted_at IS NULL":"SELECT id FROM folders WHERE id=? AND deleted_at IS NULL",[s.target_id]);
- return found?s:null;
+  // Revocation is checked at request time as well as at membership-change time.
+  // This also handles disabled accounts, revoked folder ACLs and file moves,
+  // without ever exposing an old public token if a D1 write was interrupted.
+  const creator=await one(db,"SELECT id,role,status FROM users WHERE id=?",[s.created_by]);
+  if(!creator||creator.status!=='active')return null;
+  return await target(db,creator,s.target_type,s.target_id)?s:null;
 }
-export function shareSummary(s){return {id:s.id,type:s.type,target_type:s.target_type,target_id:s.target_id,expires_at:s.expires_at,has_password:Boolean(s.password_hash),allow_download:Boolean(s.allow_download),max_downloads:s.max_downloads,download_count:s.download_count,revoked_at:s.revoked_at,created_at:s.created_at};}
+// A folder share must not make subfolders newly denied to its creator visible.
+export async function shareCreatorCanReadFolder(db,share,folderId){
+ const creator=await one(db,"SELECT id,role,status FROM users WHERE id=?",[share.created_by]);
+ if(!creator||creator.status!=='active')return false;
+ return canFolder(await folderAccess(db,creator,folderId),'read');
+}
+export function shareSummary(s){return {id:s.id,type:s.type,target_type:s.target_type,target_id:s.target_id,expires_at:s.expires_at,has_password:Boolean(s.password_hash),allow_download:Boolean(s.allow_download),max_downloads:s.max_downloads,download_count:s.download_count,revoked_at:s.revoked_at,created_at:s.created_at,target_name:s.target_name??null,link_recoverable:Boolean(s.link_ciphertext),status:s.status??(s.revoked_at?'revoked':s.expires_at&&Date.parse(s.expires_at)<=Date.now()?'expired':s.max_downloads&&s.download_count>=s.max_downloads?'download_limit':'active')};}
 export async function validatedAccess(req,db,s){
  if(!s.password_hash)return true;
  const cookie=(req.headers.get('cookie')||'').match(/(?:^|;\s*)cd_share_access=([a-f0-9]{64})(?:;|$)/)?.[1];
@@ -41,12 +54,18 @@ export async function createShare(req,env,user,data){
  const expiresAt=data.expires_at===undefined?new Date(Date.now()+(await settings(db)).default_share_days*86400000).toISOString():data.expires_at;
  if(!['page','temporary'].includes(type)||!['file','folder'].includes(targetType)||typeof id!=='string'||!validExpiry(expiresAt))return error('INVALID_SHARE','分享参数无效',400);
  if(type==='temporary'&&targetType!=='file')return error('INVALID_SHARE','临时直链只支持单个文件',400);
+ if(type==='temporary'&&expiresAt===null)return error('INVALID_EXPIRY','临时直链必须设置有效期，永久分享请使用分享页面或公开直链',400);
  if(data.password&&type!=='page')return error('INVALID_SHARE','临时直链不支持密码，请使用分享页面',400);
  if(data.password&&(typeof data.password!=='string'||data.password.length<12||data.password.length>128))return error('INVALID_PASSWORD','分享密码至少 12 个字符',400);
+ if(typeof data.allow_download!=='undefined'&&typeof data.allow_download!=='boolean')return error('INVALID_SHARE','下载权限必须为布尔值',400);
+ if(data.max_downloads!==undefined&&data.max_downloads!==null&&(!Number.isSafeInteger(data.max_downloads)||data.max_downloads<1||data.max_downloads>100000))return error('INVALID_SHARE','下载次数应在 1–100000 范围',400);
+ if(type==='temporary'&&data.allow_download===false)return error('INVALID_SHARE','直链必须允许下载',400);
+ if(linkKeyStatus(env)==='invalid')return error('LINK_KEY_INVALID','SHARE_LINK_KEY 格式必须为 64 位十六进制',503);
  if(!await target(db,user,targetType,id))return error('FORBIDDEN','没有分享权限或资源不可用',403);
  const token=randomToken(32),sid=uuid(),codeHash=await sha256(token),pw=data.password?await passwordHash(data.password):null;
- await execute(db,'INSERT INTO shares(id,type,target_type,target_id,share_code_hash,password_hash,expires_at,allow_download,created_by) VALUES(?,?,?,?,?,?,?,?,?)',[sid,type,targetType,id,codeHash,pw,expiresAt,data.allow_download===false?0:1,user.id]);
- const url=new URL(req.url);return ok({share:shareSummary({id:sid,type,target_type:targetType,target_id:id,expires_at:expiresAt,password_hash:pw,allow_download:data.allow_download===false?0:1,download_count:0,created_at:new Date().toISOString()}),url:`${url.origin}/${type==='page'?'s':'t'}/${token}`},201);
+ const encrypted=await encryptShareCode(env,sid,token),max=data.max_downloads??null;
+ await execute(db,'INSERT INTO shares(id,type,target_type,target_id,share_code_hash,link_ciphertext,password_hash,expires_at,allow_download,max_downloads,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?)',[sid,type,targetType,id,codeHash,encrypted,pw,expiresAt,type==='page'&&data.allow_download===false?0:1,max,user.id]);
+ const url=new URL(req.url);return ok({share:shareSummary({id:sid,type,target_type:targetType,target_id:id,expires_at:expiresAt,password_hash:pw,allow_download:type==='page'&&data.allow_download===false?0:1,max_downloads:max,download_count:0,link_ciphertext:encrypted,created_at:new Date().toISOString()}),url:sharePath(url.origin,type,token),link_recovery:encrypted?'recoverable':'rotation_only'},201);
 }
 export async function listOwnedShares(db,user){return many(db,'SELECT * FROM shares WHERE created_by=? ORDER BY created_at DESC LIMIT 100',[user.id]);}
 export function shareHeaders(){return {'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','Cross-Origin-Resource-Policy':'same-origin'};}
@@ -58,7 +77,7 @@ export async function serveSharedFile(req,env,s,fileId,{preview=false}={}){
  if(s.target_type==='folder'){
   let folder=f.folder_id,found=false;const seen=new Set();
   while(folder&&!seen.has(folder)){seen.add(folder);if(folder===s.target_id){found=true;break;}const parent=await one(db,'SELECT parent_id FROM folders WHERE id=? AND deleted_at IS NULL',[folder]);folder=parent?.parent_id;}
-  if(!found)return error('NOT_FOUND','文件不存在',404);
+  if(!found||!await shareCreatorCanReadFolder(db,s,f.folder_id))return error('NOT_FOUND','文件不存在',404);
  }
  if(!preview&&!s.allow_download)return error('DOWNLOAD_DISABLED','该分享不允许下载',403);
  if(preview&&!['image/jpeg','image/png','image/webp','image/gif','video/mp4','video/webm','application/pdf'].includes(f.mime_type))return error('UNSUPPORTED','不支持预览',415);
@@ -79,6 +98,25 @@ export async function serveSharedFile(req,env,s,fileId,{preview=false}={}){
  if(r)headers.set('Content-Range',`bytes ${r.offset}-${r.offset+r.length-1}/${f.size_bytes}`);
  return new Response(req.method==='HEAD'?null:obj.body,{status:r?206:200,headers});
 }
+// A public R2 custom domain must point to PUBLIC_BUCKET, not to the private bucket.
+export function cdnBaseUrl(value){
+ if(!value)return null;
+ try{const u=new URL(value);return u.protocol==='https:'&&!u.username&&!u.password&&u.pathname==='/'&&!u.search&&!u.hash?u.origin:null;}catch{return null;}
+}
+export function publicationUrl(req,env,p){const domain=cdnBaseUrl(env.PUBLIC_BASE_URL);return domain?`${domain}/${p.public_path}`:`${new URL(req.url).origin}/p/${p.id}`;}
+export async function purgePublicationCache(env,p){
+ const domain=cdnBaseUrl(env.PUBLIC_BASE_URL);
+ if(!domain||!env.CDN_ZONE_ID||!env.CDN_PURGE_TOKEN)return {purged:false,reason:'CDN_PURGE_NOT_CONFIGURED'};
+ if(!/^[a-f0-9]{32}$/i.test(env.CDN_ZONE_ID))return {purged:false,reason:'CDN_ZONE_ID_INVALID'};
+ try{
+  const response=await fetch(`https://api.cloudflare.com/client/v4/zones/${env.CDN_ZONE_ID}/purge_cache`,{
+   method:'POST',headers:{Authorization:`Bearer ${env.CDN_PURGE_TOKEN}`,'Content-Type':'application/json'},
+   body:JSON.stringify({files:[`${domain}/${p.public_path}`]})
+  });
+  const result=await response.json();
+  return {purged:Boolean(response.ok&&result.success),reason:response.ok&&result.success?null:'CDN_PURGE_FAILED'};
+ }catch(err){console.warn('CloudDrive cache purge failed',err?.message||err);return {purged:false,reason:'CDN_PURGE_FAILED'};}
+}
 // A public copy consumes physical storage and must be included in application
 // quotas. Revocation is idempotent even if R2 delete succeeded but D1 failed.
 export async function revokePublication(env,db,publication){
@@ -94,28 +132,31 @@ export async function revokePublication(env,db,publication){
   db.prepare("UPDATE publications SET status='revoked' WHERE id=? AND status='ready'").bind(p.id),
   db.prepare("UPDATE storage_objects SET status='deleted' WHERE id=?").bind(p.public_object_id)
  ]);
+ return await purgePublicationCache(env,{...p,public_path:p.public_path||object.object_key});
 }
 export async function publishFile(req,env,user,fileId){
  const db=dbFromEnv(env);const f=await target(db,user,'file',fileId);if(!f)return error('FORBIDDEN','没有发布权限',403);
  if(user.role!=='super_admin')return error('FORBIDDEN','只有超级管理员可以发布永久公开文件',403);
- if(env.PUBLIC_BASE_URL && !/^https:\/\/[^\s/]+/.test(env.PUBLIC_BASE_URL))return error('PUBLIC_URL_INVALID','公开域名必须为有效的 HTTPS 地址',503);
+ if(env.PUBLIC_BASE_URL && !cdnBaseUrl(env.PUBLIC_BASE_URL))return error('PUBLIC_URL_INVALID','公开域名必须是 HTTPS 主机名（不可包含路径或查询参数）',503);
  if(!env.PUBLIC_BUCKET?.put)return error('PUBLIC_BUCKET_UNSET','公开 R2 Binding 未配置',503);
  const source=await one(db,"SELECT o.object_key FROM files f JOIN storage_objects o ON o.id=f.object_id WHERE f.id=? AND o.status='ready'",[fileId]);if(!source)return error('NOT_FOUND','文件不可用',404);
  const previous=await one(db,"SELECT id FROM publications WHERE source_file_id=? AND status='ready'",[fileId]);if(previous)return error('ALREADY_PUBLISHED','文件已经公开发布',409);
  const reservation=await execute(db,RESERVE_SQL,[f.size_bytes,f.space_id,f.size_bytes,DEFAULT_QUOTA_BYTES,f.size_bytes,DEFAULT_QUOTA_BYTES]);
  if(!reservation.meta?.changes)return error('QUOTA_EXCEEDED','公开副本会超过可用存储容量',413);
- const publicId=uuid(),pid=uuid(),key=`published/${publicId}`,url=env.PUBLIC_BASE_URL?`${env.PUBLIC_BASE_URL.replace(/\/$/,'')}/${key}`:`${new URL(req.url).origin}/p/${pid}`;
+ const publicId=uuid(),pid=uuid(),key=`published/${publicId}`,url=publicationUrl(req,env,{id:pid,public_path:key});
  let created=false;
  try{
   const object=await env.PRIVATE_BUCKET.get(source.object_key);if(!object)throw new Error('Private source missing');
-  const saved=await env.PUBLIC_BUCKET.put(key,object.body,{httpMetadata:{contentType:f.mime_type}});created=true;
+  const mime=['image/jpeg','image/png','image/webp','image/gif','video/mp4','video/webm','application/pdf'].includes(f.mime_type)?f.mime_type:'application/octet-stream';
+  const disposition=`${mime==='application/octet-stream'?'attachment':'inline'}; filename*=UTF-8''${encodeURIComponent(f.name)}`;
+  const saved=await env.PUBLIC_BUCKET.put(key,object.body,{httpMetadata:{contentType:mime,contentDisposition:disposition}});created=true;
   if(saved.size!==f.size_bytes)throw new Error('Published file size mismatch');
   await db.batch([
    db.prepare("INSERT INTO storage_objects(id,bucket_type,object_key,size_bytes,etag,status) VALUES(?,'public',?,?,?,'ready')").bind(publicId,key,f.size_bytes,saved.etag||null),
    db.prepare("INSERT INTO publications(id,source_file_id,public_object_id,public_path,status,created_by) VALUES(?,?,?,?,'ready',?)").bind(pid,fileId,publicId,key,user.id),
    db.prepare('UPDATE spaces SET reserved_bytes=reserved_bytes-?,used_bytes=used_bytes+? WHERE id=?').bind(f.size_bytes,f.size_bytes,f.space_id)
   ]);
-  return ok({id:pid,url},201);
+  return ok({id:pid,url,delivery:cdnBaseUrl(env.PUBLIC_BASE_URL)?'cdn':'worker',warning:cdnBaseUrl(env.PUBLIC_BASE_URL)?'CDN 可能缓存已撤销文件；建议配置按 URL 清理缓存':'尚未绑定公开 R2 自定义域名，当前文件经 Worker /p/ 下载'},201);
  }catch(e){
   console.error('Publication error',e);
   if(created){try{await env.PUBLIC_BUCKET.delete(key)}catch(cleanupError){

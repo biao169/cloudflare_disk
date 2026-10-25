@@ -2,3 +2,11 @@
 # official Deploy to Cloudflare web deployment form. NEVER publish your real token.
 # CloudDrive rejects the literal placeholder shown below.
 BOOTSTRAP_TOKEN=REPLACE_WITH_A_UNIQUE_RANDOM_SECRET_AT_LEAST_32_CHARACTERS
+
+# RC8 optional: create a stable 32-byte (64 hex) secret with PowerShell:
+# $b = New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Fill($b); [Convert]::ToHexString($b)
+# SHARE_LINK_KEY=PASTE_YOUR_64_HEX_KEY_HERE
+# Without it, existing share links can only be reissued by rotating the token.
+# Do not put the following optional runtime CDN secrets in Git:
+# CDN_ZONE_ID=your_zone_id
+# CDN_PURGE_TOKEN=restricted_zone_cache_purge_token

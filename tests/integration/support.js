@@ -52,7 +52,13 @@ export class MemoryR2 {
   const bytes=r?item.bytes.slice(r.offset,r.offset+r.length):item.bytes;
   return {key,size:item.bytes.length,etag:etagOf(item.bytes),httpEtag:`"${etagOf(item.bytes)}"`,body:new Blob([bytes]).stream(),httpMetadata:{contentType:item.mime}};
  }
- async head(key){const i=this.objects.get(key);return i?{key,size:i.bytes.length}:null;}
+ async head(key){const i=this.objects.get(key);return i?{key,size:i.bytes.length,etag:etagOf(i.bytes)}:null;}
+ async list({limit=1000,cursor}={}){
+  const keys=[...this.objects.keys()].sort();
+  const offset=cursor?Number(cursor):0;const batch=keys.slice(offset,offset+limit);
+  const next=offset+batch.length;
+  return {objects:batch.map(key=>({key,size:this.objects.get(key).bytes.length,uploaded:new Date(0)})),truncated:next<keys.length,cursor:next<keys.length?String(next):undefined};
+ }
  async delete(key){if(this.failDelete)throw Error('R2 simulated outage');this.objects.delete(key);}
  async createMultipartUpload(key,opts={}){
   const uploadId=crypto.randomUUID();this.multipart.set(uploadId,{key,parts:new Map(),opts});

@@ -1,13 +1,44 @@
 import {requestJSON} from '../api.js';
-function el(type,cls,text){const n=document.createElement(type);if(cls)n.className=cls;if(text!==undefined)n.textContent=text;return n;}
-export async function renderShares(host){host.replaceChildren();host.appendChild(el('h1','h3 mb-3','我的分享'));const form=el('form','card card-body mb-4');const info=el('p','text-secondary small','在文件管理页获取文件 ID 后可建立分享；临时直链无需密码，分享页面可设密码。');form.appendChild(info);
-const id=el('input','form-control mb-2');id.placeholder='文件或文件夹 UUID';id.required=true;form.appendChild(id);
-const mode=el('select','form-select mb-2');for(const [v,t] of [['page','文件分享页面'],['temporary','临时授权直链'],['public','永久公开直链（超级管理员）']]){const o=el('option','',t);o.value=v;mode.appendChild(o);}form.appendChild(mode);
-const target=el('select','form-select mb-2');for(const [v,t] of [['file','文件'],['folder','文件夹']]){const o=el('option','',t);o.value=v;target.appendChild(o);}form.appendChild(target);
-const pw=el('input','form-control mb-2');pw.type='password';pw.placeholder='可选访问密码（至少 12 字符）';form.appendChild(pw);
-const expiry=el('input','form-control mb-2');expiry.type='datetime-local';expiry.title='有效期（留空使用管理员设置的默认天数）';form.appendChild(expiry);const never=el('label','form-check mb-3');const neverBox=el('input','form-check-input');neverBox.type='checkbox';neverBox.checked=false;const neverLabel=el('span','form-check-label ms-2','永久有效（不设置到期日）');never.append(neverBox,neverLabel);form.appendChild(never);neverBox.addEventListener('change',()=>{expiry.disabled=neverBox.checked});
-const btn=el('button','btn btn-primary','创建分享');form.appendChild(btn);host.appendChild(form);
-const result=el('div','mb-3');host.appendChild(result);const list=el('div','list-group');host.appendChild(list);
-mode.onchange=()=>{pw.disabled=mode.value!=='page';target.disabled=mode.value!=='page';if(mode.value!=='page')target.value='file';};
-async function refresh(){try{const data=await requestJSON('/api/v1/shares');list.replaceChildren();for(const s of data.shares){const row=el('div','list-group-item d-flex flex-wrap align-items-center gap-2');row.appendChild(el('span','flex-grow-1',`${s.type==='page'?'分享页面':'临时直链'} · ${s.target_type} · ${s.revoked_at?'已撤销':'有效'} · ${s.created_at}`));if(!s.revoked_at){const b=el('button','btn btn-sm btn-outline-danger','撤销');b.onclick=async()=>{if(!confirm('确认撤销？'))return;try{await requestJSON('/api/v1/shares/'+s.id,{method:'DELETE'});await refresh();}catch(e){alert(e.message)}};row.appendChild(b);}list.appendChild(row);}if(!data.shares.length)list.textContent='尚未创建分享';}catch(e){result.textContent=e.message;}}
-form.onsubmit=async e=>{e.preventDefault();try{const isPublic=mode.value==='public';const data=await requestJSON(isPublic?'/api/v1/publications':'/api/v1/shares',{method:'POST',body:isPublic?{file_id:id.value.trim()}:{type:mode.value,target_type:target.value,target_id:id.value.trim(),password:pw.value||undefined,...(neverBox.checked?{expires_at:null}:expiry.value?{expires_at:new Date(expiry.value).toISOString()}:{})}});result.replaceChildren();result.appendChild(el('span','me-2','链接：'+data.url));const copy=el('button','btn btn-sm btn-outline-primary','复制');copy.type='button';copy.onclick=()=>navigator.clipboard.writeText(data.url);result.appendChild(copy);await refresh();}catch(err){result.textContent=err.message;}};await refresh();}
+import {openShareDialog,shareStatusLabel} from '../components/share-dialog.js';
+const el=(tag,cls='',text='')=>{const n=document.createElement(tag);n.className=cls;n.textContent=text;return n;};
+const button=(name,fn,cls='btn btn-sm btn-outline-secondary')=>{const b=el('button',cls,name);b.type='button';b.onclick=fn;return b;};
+const format=raw=>{if(!raw)return '永久';const v=/^\d{4}-\d\d-\d\d /.test(raw)?raw.replace(' ','T')+'Z':raw;const d=new Date(v);return Number.isNaN(d.getTime())?raw:d.toLocaleString('zh-CN');};
+export async function renderShares(host){
+ host.replaceChildren();host.append(el('h1','h3','分享管理'),el('p','small text-secondary','文件行的「分享」按钮和这里使用同一套弹窗：查看已有链接、编辑权限、重新获取或轮换链接。'));
+ const message=el('div','mb-2'),filter=el('select','form-select form-select-sm mb-3');filter.style.maxWidth='230px';filter.setAttribute('aria-label','筛选分享状态');
+ const categories=[['all','全部状态'],['active','有效'],['expired','已过期'],['download_limit','次数已耗尽'],['permission_revoked','权限失效'],['target_unavailable','源文件已删除'],['creator_disabled','账号已停用'],['revoked','已撤销']];
+ for(const [v,label] of categories){const opt=el('option','',label);opt.value=v;filter.append(opt);}
+ host.append(message,filter);const list=el('div','list-group');host.append(list);
+ const publicationArea=el('div','mt-4');host.append(publicationArea);
+ const info=(s,cls='alert-info')=>message.replaceChildren(el('div',`alert ${cls} py-2 small`,s));
+ let records=[],isAdmin=false,publications=[];
+ function redraw(){
+  list.replaceChildren();const shown=records.filter(s=>filter.value==='all'||s.status===filter.value);
+  if(!shown.length){list.append(el('div','list-group-item text-secondary','无匹配的分享记录。请在文件列表中选择文件并点击「分享」。'));return;}
+  for(const s of shown){const row=el('div','list-group-item d-flex flex-wrap align-items-center gap-2');
+   const details=el('div','flex-grow-1');details.append(el('div','fw-semibold text-break',s.target_name||`${s.target_type==='folder'?'文件夹':'文件'}（源文件可能不可用）`));
+   details.append(el('div','small text-secondary',`${s.type==='page'?'分享页面':'临时直链'} · ${shareStatusLabel(s.status)} · 到期 ${format(s.expires_at)}${s.has_password?' · 已设访问密码':''}${s.max_downloads?` · 下载 ${s.download_count}/${s.max_downloads}`:''}`));
+   row.append(details,button('管理 / 获取链接',()=>openShareDialog({id:s.target_id,kind:s.target_type,name:s.target_name||'已删除文件'},{isAdmin,onChanged:refresh,onCreated:refresh}),'btn btn-sm btn-outline-primary'));
+   list.append(row);
+  }
+ }
+ function drawPublications(meta){publicationArea.replaceChildren();if(!isAdmin)return;
+  publicationArea.append(el('h2','h5','永久公开直链（R2）'));
+  publicationArea.append(el('p','small text-secondary',meta.cdn_configured?`CDN 已配置：${meta.cdn_base_url}${meta.purge_configured?' · 已配置自动清理缓存':' · 未配置自动缓存清理'}`:'未绑定 R2 CDN 自定义域名，公开文件会通过 Worker /p/ 代理访问。'));
+  if(!publications.length){publicationArea.append(el('div','small text-secondary','尚无公开发布记录'));return;}
+  const wrap=el('div','list-group');for(const pub of publications){const row=el('div','list-group-item d-flex align-items-center flex-wrap gap-2');
+   const label=el('div','flex-grow-1');label.append(el('div','fw-semibold text-break',pub.name||pub.public_path),el('div','text-secondary small',`${shareStatusLabel(pub.status)} · ${pub.delivery==='cdn'?'CDN 直连':'Worker 访问'} · ${format(pub.created_at)}`));
+   row.append(label);
+   if(pub.status==='ready'&&pub.url){row.append(button('复制公开链接',async()=>{try{await navigator.clipboard.writeText(pub.url);info('链接已复制','alert-success');}catch{info(`请手动复制公开 URL：${pub.url}`,'alert-warning');}},'btn btn-sm btn-outline-primary'));
+    row.append(button('撤销公开',async()=>{if(!confirm('确定撤销 R2 公开副本？CDN 缓存可能仍有效。'))return;try{const r=await requestJSON(`/api/v1/publications/${pub.id}`,{method:'DELETE'});info(r.warning,'alert-warning');await refresh();}catch(e){info(e.message,'alert-danger');}},'btn btn-sm btn-outline-danger'));
+   }
+   wrap.append(row);
+  }publicationArea.append(wrap);
+ }
+ async function refresh(){try{
+  const data=await requestJSON('/api/v1/shares');records=data.shares||[];
+  const me=await requestJSON('/api/v1/auth/me');isAdmin=me.user?.role==='super_admin';redraw();
+  if(isAdmin){const pub=await requestJSON('/api/v1/publications');publications=pub.publications||[];drawPublications(pub);}else publicationArea.replaceChildren();
+ }catch(e){info(e.message,'alert-danger');}}
+ filter.onchange=redraw;await refresh();
+}

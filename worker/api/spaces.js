@@ -6,6 +6,11 @@ const deny=()=>error('UNAUTHORIZED','请先登录',401);
 const no=()=>error('NOT_FOUND','空间或目录不存在，或无权访问',404);
 const forbidden=()=>error('FORBIDDEN','没有操作权限',403);
 const validId=id=>/^[0-9a-f-]{36}$/.test(id||'');
+const REVOKE_TEAM_SHARES=`UPDATE shares SET revoked_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP
+ WHERE created_by=? AND revoked_at IS NULL AND (
+   (target_type='file' AND target_id IN (SELECT id FROM files WHERE space_id=?)) OR
+   (target_type='folder' AND target_id IN (SELECT id FROM folders WHERE space_id=?))
+ )`;
 export async function spacesRoute(req,env,path){
  const user=await resolveUser(req,env);if(!user)return deny();
  const db=dbFromEnv(env), method=req.method;
@@ -31,11 +36,18 @@ export async function spacesRoute(req,env,path){
    if(access.role!=='admin'||access.space.type!=='team')return forbidden();const b=await jsonBody(req);
    if(!['admin','editor','viewer'].includes(b?.role))return error('INVALID_INPUT','成员角色不合法',400);
    const target=await one(db,"SELECT id,status FROM users WHERE id=?",[uid]);if(!target||target.status!=='active')return error('INVALID_USER','成员不存在或已停用',404);
-   await execute(db,'INSERT INTO space_members(space_id,user_id,role) VALUES(?,?,?) ON CONFLICT(space_id,user_id) DO UPDATE SET role=excluded.role',[id,uid,b.role]);return ok({user_id:uid,role:b.role});
+   // Downgrading to viewer revokes links issued when the user had sharing rights.
+   // Keep the membership write and share revocation in one D1 transaction.
+   const statements=[db.prepare('INSERT INTO space_members(space_id,user_id,role) VALUES(?,?,?) ON CONFLICT(space_id,user_id) DO UPDATE SET role=excluded.role').bind(id,uid,b.role)];
+   if(b.role==='viewer')statements.push(db.prepare(REVOKE_TEAM_SHARES).bind(uid,id,id));
+   await db.batch(statements);return ok({user_id:uid,role:b.role});
   }
   if(sub==='members'&&uid&&method==='DELETE'){
    if(access.role!=='admin'||access.space.type!=='team')return forbidden();if(uid===access.space.owner_id)return error('OWNER_REQUIRED','不能移除空间所有者',409);
-   await execute(db,'DELETE FROM space_members WHERE space_id=? AND user_id=?',[id,uid]);return ok({removed:true});
+   await db.batch([
+    db.prepare('DELETE FROM space_members WHERE space_id=? AND user_id=?').bind(id,uid),
+    db.prepare(REVOKE_TEAM_SHARES).bind(uid,id,id)
+   ]);return ok({removed:true});
   }
  }
  if(path==='/api/v1/folders'&&method==='POST'){
@@ -65,7 +77,7 @@ export async function spacesRoute(req,env,path){
   if(method==='GET')return ok({items:await many(db,'SELECT id,principal_type,principal_id,permission_mask FROM folder_permissions WHERE folder_id=?',[perms[1]])});
   const b=await jsonBody(req);if(!['user','role'].includes(b?.principal_type)||!Number.isInteger(b?.permission_mask)||b.permission_mask<0||b.permission_mask>31)return error('INVALID_INPUT','权限参数不合法',400);
   if(b.principal_type==='role'&&!['editor','viewer'].includes(b.principal_id))return error('INVALID_INPUT','角色不存在',400);
-  if(b.principal_type==='user'&&!(await one(db,'SELECT id FROM space_members WHERE space_id=? AND user_id=?',[f.folder.space_id,b.principal_id])))return error('INVALID_INPUT','用户不是空间成员',400);
+  if(b.principal_type==='user'&&!(await one(db,'SELECT user_id FROM space_members WHERE space_id=? AND user_id=?',[f.folder.space_id,b.principal_id])))return error('INVALID_INPUT','用户不是空间成员',400);
   await execute(db,'INSERT INTO folder_permissions(id,folder_id,principal_type,principal_id,permission_mask) VALUES(?,?,?,?,?) ON CONFLICT(folder_id,principal_type,principal_id) DO UPDATE SET permission_mask=excluded.permission_mask',[uuid(),perms[1],b.principal_type,b.principal_id,b.permission_mask]);return ok({updated:true});
  }
  return error('NOT_FOUND','接口不存在',404);

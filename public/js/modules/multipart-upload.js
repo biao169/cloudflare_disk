@@ -24,7 +24,21 @@ export function multipartUploadWidget(host,{space,folder,onFinished,onMessage}){
   }catch(e){if(paused||cancelled)throw e;if(attempt===2)throw e;await sleep(500*2**attempt)}
  }}
  async function run(){if(working||!state)return;working=true;pause.disabled=false;cancel.disabled=false;resume.disabled=true;
-  try{const s=await api(`/api/v1/uploads/${state.id}`);if(s.status!=='uploading')throw Error(`任务状态：${s.status}`);
+  try{let s=await api(`/api/v1/uploads/${state.id}`);
+   if(s.status==='failed'||s.status==='verifying'){
+    status.textContent='检测到合并中断，正在安全核对 R2 状态…';
+    const recovered=await api(`/api/v1/uploads/${state.id}/recover`,{method:'POST'});
+    if(recovered.status==='completed'){
+     localStorage.removeItem(state.key);show(state.file.size,state.file.size,'上传恢复完成');
+     pause.disabled=resume.disabled=cancel.disabled=true;state=null;onFinished?.();return;
+    }
+    throw Error('合并仍未恢复，请稍后重试（不要重新上传整个文件）');
+   }
+   if(s.status==='completed'){
+    localStorage.removeItem(state.key);show(state.file.size,state.file.size,'已上传完成');
+    pause.disabled=resume.disabled=cancel.disabled=true;state=null;onFinished?.();return;
+   }
+   if(s.status!=='uploading')throw Error(`任务状态：${s.status}`);
    const completed=new Set(s.parts.map(p=>p.part_number));const total=Math.ceil(state.file.size/state.partSize);
    show(s.parts.reduce((sum,p)=>sum+p.size_bytes,0),state.file.size,'上传中');
    const jobs=Array.from({length:total},(_,i)=>i+1).filter(n=>!completed.has(n));let cursor=0;let failed=null;
@@ -37,7 +51,19 @@ export function multipartUploadWidget(host,{space,folder,onFinished,onMessage}){
  }
  async function start(file,spaceId,folderId){if(state&&working)throw Error('已有进行中的分片任务');
   const key=keyFor(spaceId,folderId,file);let previous=readTask(key);let id,partSize;
-  if(previous){try{const s=await api(`/api/v1/uploads/${previous.id}`);if(s.status!=='uploading'||s.total_bytes!==file.size)throw Error('session unavailable');id=previous.id;partSize=s.part_size}catch{localStorage.removeItem(key);previous=null}}
+  if(previous){
+   try{
+    const s=await api(`/api/v1/uploads/${previous.id}`);
+    if(s.total_bytes!==file.size)throw Error('文件与上次上传任务不匹配');
+    if(s.status==='completed'){localStorage.removeItem(key);onFinished?.();return;}
+    if(s.status==='aborted'){localStorage.removeItem(key);previous=null;}
+    else if(['uploading','failed','verifying'].includes(s.status)){id=previous.id;partSize=s.part_size;}
+    else throw Error(`需管理员确认的上传状态：${s.status}`);
+   }catch(e){
+    if(/任务不存在|HTTP 404/.test(e.message)){localStorage.removeItem(key);previous=null;}
+    else throw e; // Do NOT silently start another large upload after a failed completion.
+   }
+  }
   if(!previous){const s=await api('/api/v1/uploads',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:file.name,space_id:spaceId,folder_id:folderId,size_bytes:file.size,mime_type:file.type||'application/octet-stream'})});id=s.upload_id;partSize=s.part_size;writeTask(key,{id})}
   state={key,id,partSize,file};paused=false;cancelled=false;await run();
  }

@@ -1,7 +1,9 @@
+import {reconcileLedger,scanR2Bucket} from '../services/reconcile.js';
 import {dbFromEnv,one,many,execute} from '../services/database.js';
 import {resolveUser,jsonBody} from '../services/auth.js';
 import {ok,error} from '../utils/response.js';
 import {settings,metrics,validateSettings,audit} from '../services/admin.js';
+import {operationsSummary,buildQuotaAlerts,runMaintenance} from '../services/operations.js';
 export async function adminRoute(req,env,path){
  const user=await resolveUser(req,env);if(!user)return error('UNAUTHORIZED','请先登录',401);
  if(user.role!=='super_admin')return error('FORBIDDEN','仅超级管理员可操作',403);
@@ -17,6 +19,67 @@ export async function adminRoute(req,env,path){
   }
  }
  if(path==='/api/v1/admin/storage'&&method==='GET')return ok({...(await metrics(db)),settings:await settings(db)});
+ if(path==='/api/v1/admin/dashboard'&&method==='GET'){
+  const [usage,preferences,operations]=await Promise.all([metrics(db),settings(db),operationsSummary(db)]);
+  return ok({usage,settings:preferences,operations,alerts:buildQuotaAlerts(usage,preferences,operations),
+   usage_source:'D1 application ledger',cloudflare_billing_verified:false,backup_verified:false});
+ }
+ if(path==='/api/v1/admin/operations/events'&&method==='GET'){
+  const params=new URL(req.url).searchParams;
+  const page=Number(params.get('page')||1),limit=Number(params.get('limit')||30);
+  if(!Number.isSafeInteger(page)||page<1||page>100||!Number.isSafeInteger(limit)||limit<1||limit>50)return error('INVALID_INPUT','分页范围无效',400);
+  const only=params.get('unacknowledged')==='1';
+  const rows=await many(db,`SELECT id,level,source,code,message,occurrences,first_seen_at,last_seen_at,acknowledged_at
+    FROM operational_events WHERE (?=0 OR acknowledged_at IS NULL)
+    ORDER BY last_seen_at DESC,id DESC LIMIT ? OFFSET ?`,[only?1:0,limit,(page-1)*limit]);
+  return ok({items:rows,page,limit,has_more:rows.length===limit,details_redacted:true});
+ }
+ const eventAck=/^\/api\/v1\/admin\/operations\/events\/([0-9a-f-]{36})\/ack$/.exec(path);
+ if(eventAck&&method==='POST'){
+  const saved=await execute(db,'UPDATE operational_events SET acknowledged_at=CURRENT_TIMESTAMP,acknowledged_by=? WHERE id=? AND acknowledged_at IS NULL',[user.id,eventAck[1]]);
+  if(!saved.meta?.changes)return error('NOT_FOUND','异常记录不存在或已确认',404);
+  await audit(db,user.id,'incident.acknowledge','incident',eventAck[1]);
+  return ok({acknowledged:true,id:eventAck[1]});
+ }
+ if(path==='/api/v1/admin/maintenance/runs'&&method==='GET'){
+  const items=await many(db,'SELECT id,source,status,started_at,finished_at,error_count,error_code,result_json FROM maintenance_runs ORDER BY started_at DESC,id DESC LIMIT 30');
+  return ok({items:items.map(row=>({...row,result:row.result_json?JSON.parse(row.result_json):null,result_json:undefined}))});
+ }
+ if(path==='/api/v1/admin/maintenance/run'&&method==='POST'){
+  const report=await runMaintenance(env,{source:'admin',actorId:user.id});
+  await audit(db,user.id,'maintenance.run','system',report.run_id||null,{status:report.status});
+  return ok(report);
+ }
+ if(path==='/api/v1/admin/backups/records'&&method==='GET'){
+  const items=await many(db,'SELECT b.id,b.backup_type,b.destination_label,b.notes,b.created_at,u.username AS recorded_by FROM backup_records b LEFT JOIN users u ON u.id=b.created_by ORDER BY b.created_at DESC,b.id DESC LIMIT 30');
+  return ok({items,verified:false,description:'管理员手工登记，记录不代表软件已核验备份完整性'});
+ }
+ if(path==='/api/v1/admin/backups/records'&&method==='POST'){
+  const body=await jsonBody(req);
+  if(!['d1_only','d1_and_r2'].includes(body?.backup_type)||typeof body.destination_label!=='string'||!body.destination_label.trim()||body.destination_label.length>120||
+   (body.notes!==undefined&&(typeof body.notes!=='string'||body.notes.length>500)))return error('INVALID_INPUT','备份登记信息无效',400);
+  const id=crypto.randomUUID();
+  await execute(db,'INSERT INTO backup_records(id,created_by,backup_type,destination_label,notes) VALUES(?,?,?,?,?)',
+   [id,user.id,body.backup_type,body.destination_label.trim(),body.notes?.trim()||null]);
+  await audit(db,user.id,'backup.register','backup',id,{backup_type:body.backup_type});
+  return ok({id,recorded:true,verified:false,note:'仅登记，尚未证明数据已安全备份'},201);
+ }
+ if(path==='/api/v1/admin/backups/manifest'&&method==='GET'){
+  const [usage,ops,counts]=await Promise.all([metrics(db),operationsSummary(db),one(db,`SELECT
+    (SELECT COUNT(*) FROM users) AS users,
+    (SELECT COUNT(*) FROM folders) AS folders,
+    (SELECT COUNT(*) FROM storage_objects) AS physical_objects,
+    (SELECT COUNT(*) FROM publications WHERE status='ready') AS active_publications`)]);
+  const at=new Date().toISOString();
+  const payload={kind:'CLOUDDRIVE_METADATA_MANIFEST',not_a_backup:true,generated_at:at,stage:env.APP_STAGE||'unknown',
+   counts,logical_storage:usage.totals,space_summaries:usage.spaces,files:usage.files,shares:usage.shares,
+   operations:{pending_cleanup:ops.cleanup_jobs,stalled_uploads:ops.stalled_uploads},
+   warnings:['此清单不包含 D1 SQL 数据、账号密码哈希或 R2 文件字节。不能用于还原网盘。',
+    '完整恢复需要 D1 SQL/Time Travel 与独立 R2 对象备份。']};
+  return new Response(JSON.stringify(payload,null,2),{status:200,headers:{'Content-Type':'application/json; charset=utf-8',
+   'Cache-Control':'no-store','Content-Disposition':`attachment; filename="clouddrive-manifest-${at.slice(0,10)}.json"`}});
+ }
+
  if(path==='/api/v1/admin/audit-logs'&&method==='GET'){
   const url=new URL(req.url),limit=Math.min(100,Math.max(1,Number(url.searchParams.get('limit'))||30));
   const before=url.searchParams.get('before');if(before&&!/^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d/.test(before))return error('INVALID_CURSOR','时间游标无效',400);
@@ -30,13 +93,25 @@ export async function adminRoute(req,env,path){
   await execute(db,'UPDATE spaces SET quota_bytes=?,updated_at=CURRENT_TIMESTAMP WHERE id=?',[value,m[1]]);await audit(db,user.id,'space.quota.update','space',m[1],{quota_bytes:value});return ok({space_id:m[1],quota_bytes:value});
  }
  if(path==='/api/v1/admin/health'&&method==='GET'){
-  const database=await one(db,'SELECT 1 AS ok');return ok({database:database?.ok===1,r2_private:Boolean(env.PRIVATE_BUCKET?.get),r2_public:Boolean(env.PUBLIC_BUCKET?.get),worker_version:'stage-12',usage_source:'application_metadata',cloudflare_billing_verified:false});
+  const database=await one(db,'SELECT 1 AS ok');return ok({database:database?.ok===1,r2_private:Boolean(env.PRIVATE_BUCKET?.get),r2_public:Boolean(env.PUBLIC_BUCKET?.get),worker_version:env.APP_STAGE||'rc6',usage_source:'application_metadata',cloudflare_billing_verified:false});
  }
- if(path==='/api/v1/admin/reconcile'&&method==='GET'){
-  const rows=await many(db,`SELECT s.id,s.name,s.used_bytes AS recorded,(COALESCE((SELECT SUM(o.size_bytes) FROM storage_objects o WHERE o.bucket_type='private' AND o.status='ready' AND EXISTS(SELECT 1 FROM files f WHERE f.object_id=o.id AND f.space_id=s.id AND f.status!='deleted')),0) + COALESCE((SELECT SUM(o.size_bytes) FROM publications p JOIN files f ON f.id=p.source_file_id JOIN storage_objects o ON o.id=p.public_object_id WHERE f.space_id=s.id AND p.status='ready' AND o.status='ready'),0)) AS referenced_bytes FROM spaces s LIMIT 100`);
-  const cleanup=await one(db,'SELECT COUNT(*) AS jobs,COALESCE(SUM(size_bytes),0) AS pending_bytes FROM storage_cleanup_jobs');
-  const stalled=await one(db,"SELECT COUNT(*) AS sessions,COALESCE(SUM(reserved_bytes),0) AS reserved_bytes FROM upload_sessions WHERE status IN ('verifying','failed')");
-  return ok({mode:'read_only',cleanup_pending:cleanup,stalled_uploads:stalled,warning:'文件跨空间共享引用、回收站和进行中任务可能使此诊断不能直接用作账单计数；不会自动修改数据。',spaces:rows});
+ if(path==='/api/v1/admin/uploads/recover'&&method==='POST'){
+  const result=await runMaintenance(env,{source:'admin',actorId:user.id,tasks:['uploads','storage']});
+  if(result.status==='skipped')return error('MAINTENANCE_BUSY','已有清理任务正在执行，请稍后重试',409);
+  await audit(db,user.id,'upload.recovery.run','system',null,{run_id:result.run_id,status:result.status});
+  return ok({uploads:result.results?.uploads||{attempted:0,cleaned:0,pending:0},storage:result.results?.storage||{attempted:0,cleaned:0},run_id:result.run_id,
+   note:'只处理过期或停滞上传，并重试持久化清理任务；使用 RC9 同一维护任务锁。'});
+ }
+ if(path==='/api/v1/admin/reconcile'&&method==='GET')return ok(await reconcileLedger(db));
+ if(path==='/api/v1/admin/reconcile/objects'&&method==='GET'){
+  const url=new URL(req.url);const type=url.searchParams.get('bucket');
+  if(!['private','public'].includes(type))return error('INVALID_INPUT','bucket 必须是 private 或 public',400);
+  const cursor=url.searchParams.get('cursor')||'';
+  if(cursor.length>1024)return error('INVALID_CURSOR','游标过长',400);
+  const raw=Number(url.searchParams.get('limit')||50);
+  if(!Number.isSafeInteger(raw)||raw<1||raw>100)return error('INVALID_LIMIT','每页最多 100 个对象',400);
+  try{return ok({bucket:type,...await scanR2Bucket(db,type==='private'?env.PRIVATE_BUCKET:env.PUBLIC_BUCKET,{cursor,limit:raw})});}
+  catch(e){console.warn('R2 reconciliation scan unavailable',e);return error('R2_SCAN_FAILED','R2 容量扫描暂时不可用',503);}
  }
  return error('NOT_FOUND','接口不存在',404);
 }

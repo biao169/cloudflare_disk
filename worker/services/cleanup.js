@@ -5,7 +5,7 @@ import {one,many,execute,dbFromEnv} from './database.js';
 export async function finishStorageCleanup(env,job){
  const db=dbFromEnv(env);
  // Never remove an object that has acquired a new logical reference.
- const stillUsed=await one(db,'SELECT id FROM files WHERE object_id=? LIMIT 1',[job.object_id]);
+ const stillUsed=await one(db,'SELECT f.id FROM files f JOIN storage_objects o ON o.id=f.object_id WHERE o.id=? OR o.object_key=? LIMIT 1',[job.object_id,job.object_key]);
  if(stillUsed)throw new Error('Cleanup object still referenced by a file');
  const bucket=job.bucket_type==='private'?env.PRIVATE_BUCKET:env.PUBLIC_BUCKET;
  if(!bucket?.delete)throw new Error('Cleanup R2 binding missing');
@@ -14,8 +14,9 @@ export async function finishStorageCleanup(env,job){
   // this operation can safely be repeated.
   await bucket.delete(job.object_key);
   await db.batch([
-   db.prepare('DELETE FROM storage_objects WHERE id=? AND NOT EXISTS (SELECT 1 FROM files WHERE object_id=?)').bind(job.object_id,job.object_id),
-   db.prepare('UPDATE spaces SET used_bytes=MAX(0,used_bytes-?) WHERE id=?').bind(job.size_bytes,job.space_id),
+   db.prepare('DELETE FROM storage_objects WHERE id=? AND NOT EXISTS (SELECT 1 FROM files WHERE object_id=?) AND EXISTS (SELECT 1 FROM storage_cleanup_jobs WHERE id=?)').bind(job.object_id,job.object_id,job.id),
+   db.prepare('UPDATE spaces SET used_bytes=MAX(0,used_bytes-?),reserved_bytes=MAX(0,reserved_bytes-?) WHERE id=? AND EXISTS (SELECT 1 FROM storage_cleanup_jobs WHERE id=?)').bind(job.size_bytes,job.reserved_release_bytes||0,job.space_id,job.id),
+   db.prepare("UPDATE upload_sessions SET reserved_bytes=0 WHERE id=? AND status='aborted' AND EXISTS (SELECT 1 FROM storage_cleanup_jobs WHERE id=?)").bind(job.upload_session_id||'',job.id),
    db.prepare('DELETE FROM storage_cleanup_jobs WHERE id=?').bind(job.id)
   ]);
   return true;

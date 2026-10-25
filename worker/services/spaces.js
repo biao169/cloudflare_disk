@@ -16,6 +16,7 @@ export async function visibleSpaces(db,user){
  WHERE s.owner_id=? OR m.user_id=? OR ?=1 ORDER BY CASE s.type WHEN 'personal' THEN 0 ELSE 1 END,s.name`,[user.id,user.id,user.id,user.id,isAdmin(user)?1:0]);
 }
 export async function spaceAccess(db,user,spaceId){
+ if(!user||user.status==='disabled')return null;
  const space=await one(db,'SELECT * FROM spaces WHERE id=?',[spaceId]);if(!space)return null;
  if(isAdmin(user)||space.owner_id===user.id)return {space,role:'admin'};
  const member=await one(db,'SELECT role FROM space_members WHERE space_id=? AND user_id=?',[spaceId,user.id]);return member?{space,role:member.role}:null;

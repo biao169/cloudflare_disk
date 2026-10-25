@@ -1,4 +1,4 @@
-# CloudDrive V1 RC5 — Cloudflare 网页版自动部署（优先阅读）
+# CloudDrive V1 RC9 — Cloudflare 网页版自动部署（优先阅读）
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/biao169/cloudflare_disk)
 
@@ -7,7 +7,39 @@
 **当前已部署站点：** https://cloudflare-disk.2948531734.workers.dev  
 **架构：** 原生 HTML + Bootstrap 5 + JavaScript、Cloudflare Workers Free、D1、R2（公开/私有两个桶）。**无需 Vue、Vite 或前端编译。**
 
-> 本版专门修复“Worker/R2/D1 Binding 均创建成功，但 `/api/v1/health/ready` 始终返回 `D1_MIGRATIONS_REQUIRED`”的问题。原因之一是 Wrangler 的自动资源创建允许省略 `database_id`，而远程 D1 migrations 命令可能要求真实 `database_id`。RC5 在部署过程中自动发现并注入 ID 到一个**临时**配置文件，不修改或提交账号专属 ID。另修复 `0001_initial.sql` 中不适合 D1 迁移事务的 `PRAGMA foreign_keys = ON`。
+> RC5 已修复“Worker/R2/D1 Binding 均创建成功，但 `/api/v1/health/ready` 始终返回 `D1_MIGRATIONS_REQUIRED`”的问题。原因之一是 Wrangler 的自动资源创建允许省略 `database_id`，而远程 D1 migrations 命令可能要求真实 `database_id`。RC5 在部署过程中自动发现并注入 ID 到一个**临时**配置文件，不修改或提交账号专属 ID。另修复 `0001_initial.sql` 中不适合 D1 迁移事务的 `PRAGMA foreign_keys = ON`。
+
+## RC9：生产运维仪表盘、容量预警、自动清理和完整备份恢复
+
+**保持 Cloudflare 免费架构和原有 Worker/D1/R2 不变。** RC9 新增 `0015_rc9_operations.sql`（只增表和索引）、持久化运行记录和异常事件、全局/空间配额预警、统一运维管理页面 `/settings`、带 D1 任务锁的 Cron 小批次清理，以及 Windows D1 SQL + 私有/公开双桶真正文件备份脚本。恢复默认只读预检查，真实恢复只允许新建隔离资源。
+
+已有 Cloudflare **Build Command `npm run build`、Deploy Command `npm run deploy` 不变**。新增 SQL 在部署时自动应用。Cron 改为 UTC 每 6 小时运行：`0 */6 * * *`，不产生新的 Cron Trigger 数量要求。**不用新增 Worker Secret**；`BOOTSTRAP_TOKEN`、`SHARE_LINK_KEY` 不要改变。
+
+**完整备份（Windows，需配置 rclone 的 R2 remote）**：`powershell -ExecutionPolicy Bypass -File .\scripts\backup-production.ps1 -R2Remote r2`。R2 内容不能靠 D1 的免费 7 天 Time Travel 恢复。运维细节、隔离恢复步骤、状态码和安全边界：[docs/RC9_OPERATIONS.md](docs/RC9_OPERATIONS.md)。
+
+## RC8：统一分享、权限编辑、链接安全恢复与公开 CDN
+
+本次基于 RC7，统一文件行和「我的分享」的 Bootstrap 分享管理弹窗：查看全部已有链接，设置/修改有效期、下载上限、页面下载开关、访问密码，显示过期/撤销/源文件已删除/创建者权限失效等状态。新增 `0014_rc8_share_management.sql` **仅新增加密密文字段和索引，不删除旧分享**。
+
+**重新获取链接需要额外设置（建议）**：在现有 Worker → **Settings → Variables and Secrets → Add Secret** 添加稳定的 `SHARE_LINK_KEY`（32 字节，即 64 位十六进制字符）；不配置时仍可使用分享功能，但原链接只在创建时显示，之后只能轮换生成新链接。**旧版本分享令牌此前仅存哈希，无法恢复；轮换会使旧链接失效。不要在生产运行后随意更换 `SHARE_LINK_KEY`。**
+
+**公开 CDN**：仅对 R2 `clouddrive-public` 绑定**自定义 HTTPS 子域名**，然后在 GitHub 仓库 `wrangler.jsonc → vars.PUBLIC_BASE_URL` 中填写 `https://cdn.example.com`（替换为实际域名）。`clouddrive-private` 永远保持私有。撤销 CDN 发布后缓存可能继续存在，建议可选配置 `CDN_ZONE_ID` 和 `CDN_PURGE_TOKEN` 以尝试单 URL 缓存清理。**不设置域名则仅为 Worker `/p/` 公开直链，不是 CDN 直连。**
+
+现有 Dashboard 配置继续保持 **Build Command `npm run build`，Deploy Command `npm run deploy`**。升级说明与 API： [docs/RC8_SHARE_MANAGEMENT.md](docs/RC8_SHARE_MANAGEMENT.md)。
+
+## RC7：生产版文件浏览、最近文件与就地分享
+
+RC7 在 RC6 的可靠性修复基础上，新增真实的跨授权空间“最近文件”、文件管理列表/网格切换、排序、类型筛选与分页、可浏览的目标目录选择器、文件及目录批量移动/删除、批量复制文件，以及文件行和文件夹行直接打开的 Bootstrap 分享弹窗。**分享弹窗提供模式和时效设置，不跳转到独立的分享创建页面，也不要求用户输入 UUID。** 原生浏览器下载继续避免大文件被完整加载到 JavaScript 内存，并加入 `If-Range` 对象版本检查。
+
+新增 SQL 迁移 `0013_rc7_file_browser.sql` 仅添加两个非破坏性索引；无需重新初始化管理员或重新创建 D1/R2。**现有网页部署命令保持 `npm run build` / `npm run deploy` 不变**，自动执行待应用的迁移。参见 [RC7 详细功能、API、升级与限制](docs/RC7_FILE_EXPERIENCE.md)。
+
+## RC6：此次生产升级先看这里
+
+在 RC5 自动部署基础上，RC6 修复了团队权限变化后的旧分享访问、回收站访问控制与独立子项恢复、分片合并失败后的 R2/D1 恢复、浏览器大文件 Blob 内存占用以及存储容量核对。**新增一份增量 D1 迁移** `0012_rc6_reliability.sql`，其余已迁移 SQL 不变。
+
+**保持现有 Cloudflare Builds 设置**：`Build Command = npm run build`、`Deploy Command = npm run deploy`。更新 GitHub main 后自动先迁移生产 D1、再更新同名 Worker；不要创建新桶、重新初始化管理员或删除既有数据库。变更细节、数据安全边界与新的恢复/核对接口见 [RC6 生产安全修复说明](docs/RC6_PRODUCTION_HARDENING.md)。
+
+管理员登录 `/settings` 可以查看只读 D1 账本差异、分页扫描公开/私有 R2 对象，并有权限触发 **每批最多 3 个任务** 的停滞上传恢复。物理扫描仅核对，不会自动删除未跟踪对象或强行重算配额。**升级生产前请备份重要 D1 及 R2 数据。**
 
 ## 0. 已有 Cloudflare Worker：只需设置一次构建/部署命令
 
@@ -28,8 +60,10 @@
 |---|---|---|---|
 | `BOOTSTRAP_TOKEN` | **Worker Settings → Variables and Secrets → Secret** | **首次创建管理员必需**；随机 32 字符以上，建议 64 位十六进制字符 | 管理员首次初始化验证。绝不写进 Git 或 Build 日志 |
 | `APP_NAME` | `wrangler.jsonc → vars` | 已有默认 `CloudDrive` | 网盘名称 |
-| `APP_STAGE` | `wrangler.jsonc → vars` | 已有默认 `rc5-auto-deploy` | 版本诊断 |
-| `PUBLIC_BASE_URL` | `wrangler.jsonc → vars` | 默认空，可暂不填写 | 配置 R2 CDN 自定义域名；留空使用 Worker `/p/{id}` |
+| `APP_STAGE` | `wrangler.jsonc → vars` | 已有默认 `rc8-share-management` | 版本诊断 |
+| `PUBLIC_BASE_URL` | `wrangler.jsonc → vars` | 默认空，可暂不填写 | **真实公开桶自定义 HTTPS 域名**；留空使用 Worker `/p/{id}` |
+| `SHARE_LINK_KEY` | Worker Runtime Secret | 建议设置稳定的 64 位十六进制字符 | 允许新/轮换后分享链接安全重新获取；旧哈希链接必须轮换 |
+| `CDN_ZONE_ID` / `CDN_PURGE_TOKEN` | Worker Runtime Secret（可选） | CDN 域名所属 Zone 和 Cache Purge API Token | 撤销公开直链时尝试清理 CDN 缓存 |
 | `DB` | `wrangler.jsonc → d1_databases` | 自动绑定 `clouddrive-db` | D1 数据库（不能作为普通环境变量填写） |
 | `PRIVATE_BUCKET` | `r2_buckets` | `clouddrive-private` | 真实文件，**绝不启用 R2 公开域名** |
 | `PUBLIC_BUCKET` | `r2_buckets` | `clouddrive-public` | 主动公开发布的文件 |
@@ -101,10 +135,10 @@ npm run db:backup:remote
 ## 4. 项目功能与技术架构
 
 - 多人账号体系、角色权限、个人/团队空间及文件夹级 ACL。
-- 文件夹和文件的 D1 元数据管理、批量移动、重命名、搜索。
+- 文件夹和文件的 D1 元数据管理、目录选择、批量操作、真正的最近文件、列表/网格浏览、重命名、搜索。
 - 私有 R2 普通/Multipart 上传、断点续传、权限保护的下载和 Range 支持。
 - 图片、MP4/WebM、PDF 在线预览。
-- 公开发布直链、临时直链、密码分享页面、文件夹分享。
+- 公开发布直链、临时直链、密码分享页面、文件夹分享；每个文件/文件夹行就地弹窗配置模式和有效期。
 - 回收站、自动过期清理、存储清理重试、应用级容量软上限。
 - 原生静态 HTML/CSS/JS + Bootstrap，Wrangler 自动处理 Worker 发布，没有 Vue/Vite 构建系统。
 

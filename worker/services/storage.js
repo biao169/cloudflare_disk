@@ -43,8 +43,27 @@ export async function uploadFile(request,env,user){
   return ok({id:fileId,name,size_bytes:size,mime_type:mime},201);
  }catch(e){
   console.error('Upload failed',e);
-  if(stored){try{await bucket.delete(key)}catch(cleanupError){console.error('Orphan R2 object requiring cleanup',key,cleanupError)}}
-  try{await execute(db,'UPDATE spaces SET reserved_bytes=MAX(0,reserved_bytes-?) WHERE id=?',[size,spaceId])}catch(cleanupError){console.error('Reservation cleanup failed',cleanupError)}
+  let mayExist=stored;
+  if(!stored){try{mayExist=Boolean(await bucket.head(key))}catch{mayExist=true;}}
+  let keepReservation=false;
+  if(mayExist){
+   try{await bucket.delete(key)}
+   catch(cleanupError){
+    console.error('Orphan R2 object requiring durable cleanup',key,cleanupError);
+    try{
+     await execute(db,`INSERT OR IGNORE INTO storage_cleanup_jobs
+      (id,object_id,object_key,bucket_type,space_id,size_bytes,reserved_release_bytes)
+      VALUES(?,?,?,'private',?,0,?)`,[uuid(),`single-${objectId}`,key,spaceId,size]);
+     keepReservation=true;
+    }catch(ledgerError){keepReservation=true;console.error('CRITICAL: orphan cleanup ledger unavailable',ledgerError);}
+   }
+  }
+  // Keep quota charged if R2 could not confirm deletion. The admin's physical
+  // reconciliation scan can identify uncertain orphans if D1 was also down.
+  if(!keepReservation){
+   try{await execute(db,'UPDATE spaces SET reserved_bytes=MAX(0,reserved_bytes-?) WHERE id=?',[size,spaceId])}
+   catch(cleanupError){console.error('Reservation cleanup failed',cleanupError)}
+  }
   return error('UPLOAD_FAILED','文件上传失败，未建立可见文件记录',503);
  }
 }
@@ -72,7 +91,7 @@ async function validatePreviewObject(bucket,key,mime){
 }
 export async function downloadFile(request,env,user,fileId,{preview=false}={}){
  const db=dbFromEnv(env),bucket=storageBinding(env);
- const file=await one(db,"SELECT f.*,o.object_key,o.bucket_type,o.status AS object_status FROM files f JOIN storage_objects o ON o.id=f.object_id WHERE f.id=? AND f.status='ready' AND f.deleted_at IS NULL",[fileId]);
+ const file=await one(db,"SELECT f.*,o.object_key,o.bucket_type,o.etag AS object_etag,o.status AS object_status FROM files f JOIN storage_objects o ON o.id=f.object_id WHERE f.id=? AND f.status='ready' AND f.deleted_at IS NULL",[fileId]);
  if(!file||file.object_status!=='ready'||file.bucket_type!=='private')return error('NOT_FOUND','文件不存在',404);
  const access=await spaceAccess(db,user,file.space_id);
  if(!access)return error('NOT_FOUND','文件不存在',404);
@@ -80,15 +99,19 @@ export async function downloadFile(request,env,user,fileId,{preview=false}={}){
  else if(!canSpace(access,'read'))return error('NOT_FOUND','文件不存在',404);
  if(preview&&!previewAllowed(file.mime_type))return error('PREVIEW_UNSUPPORTED','不支持在线预览此类型文件',415);
  if(preview&&!(await validatePreviewObject(bucket,file.object_key,file.mime_type)))return error('PREVIEW_INVALID','文件内容与预览类型不符',415);
- const rangeHeader=request.headers.get('range');let range;
+ // If-Range permits partial content only while the stored object ETag is unchanged.
+ // An object-version mismatch must fall back to a complete response.
+ const knownEtag=file.object_etag?`"${String(file.object_etag).replace(/^"|"$/g,'')}"`:null;
+ const ifRange=request.headers.get('if-range');
+ const rangeHeader=ifRange&&(!knownEtag||ifRange!==knownEtag)?null:request.headers.get('range');let range;
  if(rangeHeader){const match=/^bytes=(\d*)-(\d*)$/.exec(rangeHeader);if(!match||(!match[1]&&!match[2]))return new Response(null,{status:416,headers:{'Content-Range':`bytes */${file.size_bytes}`}});
   if(match[1]){const start=Number(match[1]),end=match[2]?Number(match[2]):file.size_bytes-1;if(!Number.isSafeInteger(start)||!Number.isSafeInteger(end)||start>end||start>=file.size_bytes)return new Response(null,{status:416,headers:{'Content-Range':`bytes */${file.size_bytes}`}});range={offset:start,length:Math.min(end,file.size_bytes-1)-start+1};}
   else {const length=Number(match[2]);if(!Number.isSafeInteger(length)||length<=0)return new Response(null,{status:416,headers:{'Content-Range':`bytes */${file.size_bytes}`}});range={offset:Math.max(0,file.size_bytes-length),length:Math.min(length,file.size_bytes)};}
  }
- const object=await bucket.get(file.object_key,range?{range}:undefined);
+ const object=request.method==='HEAD'?await bucket.head(file.object_key):await bucket.get(file.object_key,range?{range}:undefined);
  if(!object)return error('FILE_UNAVAILABLE','存储对象不存在',503);
  const headers=new Headers({'Content-Type':file.mime_type||'application/octet-stream','Content-Disposition':`${preview?'inline':'attachment'}; filename*=UTF-8''${encodeURIComponent(file.name)}`,'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','Cross-Origin-Resource-Policy':'same-origin','Accept-Ranges':'bytes','Content-Length':String(range?range.length:object.size)});
- if(object.etag)headers.set('ETag',object.httpEtag||`"${object.etag}"`);
+ if(object.etag||knownEtag)headers.set('ETag',object.httpEtag||knownEtag||`"${object.etag}"`);
  if(range)headers.set('Content-Range',`bytes ${range.offset}-${range.offset+range.length-1}/${file.size_bytes}`);
  return new Response(request.method==='HEAD'?null:object.body,{status:range?206:200,headers});
 }

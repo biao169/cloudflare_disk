@@ -1,7 +1,9 @@
 import {settings} from '../services/admin.js';
 import {resolveUser,jsonBody,randomToken,sha256,checkPassword} from '../services/auth.js';
 import {one,many,execute,dbFromEnv} from '../services/database.js';
-import {createShare,resolveShare,shareSummary,validatedAccess,serveSharedFile,publishFile,revokePublication,shareHeaders} from '../services/sharing.js';
+import {createShare,resolveShare,shareSummary,validatedAccess,serveSharedFile,publishFile,revokePublication,shareHeaders,shareCreatorCanReadFolder,publicationUrl,cdnBaseUrl} from '../services/sharing.js';
+import {ownedShare,summarized,recoverOwnedShare,rotateOwnedShare,editOwnedShare} from '../services/share-management.js';
+import {linkKeyStatus} from '../services/share-links.js';
 import {ok,error} from '../utils/response.js';
 const codePattern='([a-f0-9]{48,64})';
 export async function sharesRoute(req,env,path){
@@ -31,24 +33,57 @@ export async function sharesRoute(req,env,path){
    if(s.target_type==='file'){const f=await one(db,"SELECT id,name,size_bytes,mime_type FROM files WHERE id=? AND status='ready' AND deleted_at IS NULL",[s.target_id]);return ok({files:f?[f]:[],folders:[]});}
    const folderId=new URL(req.url).searchParams.get('folder_id')||s.target_id;
    let cursor=folderId,valid=false,seen=new Set();while(cursor&&!seen.has(cursor)){seen.add(cursor);if(cursor===s.target_id){valid=true;break;}const parent=await one(db,'SELECT parent_id FROM folders WHERE id=? AND deleted_at IS NULL',[cursor]);cursor=parent?.parent_id;}
-   if(!valid)return error('FORBIDDEN','不属于分享目录',403);
-   const [folders,files]=await Promise.all([many(db,'SELECT id,name FROM folders WHERE parent_id=? AND deleted_at IS NULL ORDER BY name LIMIT 200',[folderId]),many(db,"SELECT id,name,size_bytes,mime_type FROM files WHERE folder_id=? AND deleted_at IS NULL AND status='ready' ORDER BY name LIMIT 200",[folderId])]);return ok({folders,files,folder_id:folderId});
+   if(!valid||!await shareCreatorCanReadFolder(db,s,folderId))return error('FORBIDDEN','不属于分享目录或已撤销权限',403);
+   const [folders,files]=await Promise.all([many(db,'SELECT id,name FROM folders WHERE parent_id=? AND deleted_at IS NULL ORDER BY name LIMIT 200',[folderId]),many(db,"SELECT id,name,size_bytes,mime_type FROM files WHERE folder_id=? AND deleted_at IS NULL AND status='ready' ORDER BY name LIMIT 200",[folderId])]);
+   const visibleFolders=[];
+   for(const folder of folders)if(await shareCreatorCanReadFolder(db,s,folder.id))visibleFolders.push(folder);
+   return ok({folders:visibleFolders,files,folder_id:folderId});
   }
   return ok({type:s.type,target_type:s.target_type,has_password:Boolean(s.password_hash),allow_download:Boolean(s.allow_download),expires_at:s.expires_at});
  }
  const user=await resolveUser(req,env);if(!user)return error('UNAUTHORIZED','请先登录',401);
  if(path==='/api/v1/shares'&&req.method==='POST'){if(!(await settings(db)).public_shares_enabled)return error('SHARING_DISABLED','管理员已暂停创建新分享',403);return createShare(req,env,user,await jsonBody(req)||{});}
- if(path==='/api/v1/shares'&&req.method==='GET'){const r=await many(db,'SELECT * FROM shares WHERE created_by=? ORDER BY created_at DESC LIMIT 100',[user.id]);return ok({shares:r.map(shareSummary)});}
- let m=/^\/api\/v1\/shares\/([0-9a-f-]{36})$/.exec(path);
- if(m&&req.method==='DELETE'){const changed=await execute(db,'UPDATE shares SET revoked_at=CURRENT_TIMESTAMP WHERE id=? AND created_by=? AND revoked_at IS NULL',[m[1],user.id]);return changed.meta?.changes?ok({revoked:true}):error('NOT_FOUND','分享不存在',404);}
+ if(path==='/api/v1/shares'&&req.method==='GET'){
+  const params=new URL(req.url).searchParams,t=params.get('target_type'),id=params.get('target_id');
+  if((t||id)&&(!['file','folder'].includes(t)||!/^[a-f0-9-]{36}$/i.test(id||'')))return error('INVALID_FILTER','无效的分享筛选',400);
+  const sql=`SELECT s.*,COALESCE(f.name,fo.name) AS target_name FROM shares s LEFT JOIN files f ON s.target_type='file' AND s.target_id=f.id LEFT JOIN folders fo ON s.target_type='folder' AND s.target_id=fo.id WHERE s.created_by=? ${t?'AND s.target_type=? AND s.target_id=?':''} ORDER BY s.created_at DESC,s.id DESC LIMIT 100`;
+  const found=await many(db,sql,t?[user.id,t,id]:[user.id]);
+  const summaries=[];for(const s of found)summaries.push(await summarized(db,s));
+  return ok({shares:summaries,link_key_status:linkKeyStatus(env)});
+ }
+ let m=/^\/api\/v1\/shares\/([0-9a-f-]{36})(?:\/(link|rotate))?$/.exec(path);
+ if(m){
+  const [,id,action]=m,share=await ownedShare(db,id,user);
+  if(!share)return error('NOT_FOUND','分享不存在',404);
+  if(action==='link'&&req.method==='GET')return recoverOwnedShare(req,env,db,user,share);
+  if(action==='rotate'&&req.method==='POST')return rotateOwnedShare(req,env,db,user,share);
+  if(!action&&req.method==='GET')return ok({share:await summarized(db,share)});
+  if(!action&&req.method==='PATCH')return editOwnedShare(env,db,user,share,await jsonBody(req));
+  if(!action&&req.method==='DELETE'){
+   const changed=await execute(db,'UPDATE shares SET revoked_at=CURRENT_TIMESTAMP WHERE id=? AND created_by=? AND revoked_at IS NULL',[id,user.id]);
+   return changed.meta?.changes?ok({revoked:true}):error('SHARE_REVOKED','已撤销或不存在',409);
+  }
+  return error('METHOD_NOT_ALLOWED','方法不支持',405);
+ }
  if(path==='/api/v1/publications'&&req.method==='POST'){if(!(await settings(db)).public_shares_enabled)return error('SHARING_DISABLED','管理员已暂停创建新分享',403);const body=await jsonBody(req);return publishFile(req,env,user,body?.file_id);}
- if(path==='/api/v1/publications'&&req.method==='GET'){if(user.role!=='super_admin')return error('FORBIDDEN','无权限',403);return ok({publications:await many(db,"SELECT p.id,p.source_file_id,p.public_path,p.status,p.created_at FROM publications p WHERE status='ready' ORDER BY created_at DESC LIMIT 100")});}
+ if(path==='/api/v1/publications'&&req.method==='GET'){
+  if(user.role!=='super_admin')return error('FORBIDDEN','无权限',403);
+  const fileId=new URL(req.url).searchParams.get('file_id');
+  if(fileId&&!/^[0-9a-f-]{36}$/i.test(fileId))return error('INVALID_FILTER','文件标识无效',400);
+  const sql=`SELECT p.id,p.source_file_id,f.name,f.status AS file_status,f.deleted_at,p.public_path,p.status,p.created_at FROM publications p LEFT JOIN files f ON f.id=p.source_file_id ${fileId?'WHERE p.source_file_id=?':''} ORDER BY p.created_at DESC LIMIT 100`;
+  const items=await many(db,sql,fileId?[fileId]:[]);
+  return ok({publications:items.map(p=>({id:p.id,source_file_id:p.source_file_id,name:p.name||'源文件已删除',public_path:p.public_path,
+   status:p.status==='ready'&&(!p.name||p.deleted_at||p.file_status!=='ready')?'source_unavailable':p.status,
+   created_at:p.created_at,url:p.status==='ready'&&p.name&&!p.deleted_at&&p.file_status==='ready'?publicationUrl(req,env,p):null,
+   delivery:cdnBaseUrl(env.PUBLIC_BASE_URL)?'cdn':'worker'})),cdn_base_url:cdnBaseUrl(env.PUBLIC_BASE_URL),
+   cdn_configured:Boolean(cdnBaseUrl(env.PUBLIC_BASE_URL)),purge_configured:Boolean(env.CDN_ZONE_ID&&env.CDN_PURGE_TOKEN)});
+ }
  m=/^\/api\/v1\/publications\/([0-9a-f-]{36})$/.exec(path);
  if(m&&req.method==='DELETE'){
   if(user.role!=='super_admin')return error('FORBIDDEN','无权限',403);
   const p=await one(db,"SELECT p.*,o.object_key FROM publications p JOIN storage_objects o ON o.id=p.public_object_id WHERE p.id=? AND p.status='ready'",[m[1]]);if(!p)return error('NOT_FOUND','公开资源不存在',404);
-  await revokePublication(env,db,p);
-  return ok({revoked:true,warning:'CDN 和浏览器中已缓存的文件可能仍然可访问，请在 Cloudflare 中清理该路径缓存'});
+  const cache=await revokePublication(env,db,p);
+  return ok({revoked:true,cache,warning:!cdnBaseUrl(env.PUBLIC_BASE_URL)?'已撤销 Worker 公开直链；已下载文件仍无法收回':cache?.purged?'已请求清理 Cloudflare CDN 缓存，浏览器已下载的文件仍无法收回':'CDN 缓存尚未确认清除，请在 Cloudflare 中按 URL 清理缓存'});
  }
  return error('NOT_FOUND','接口不存在',404);
 }

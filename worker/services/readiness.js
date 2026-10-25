@@ -5,7 +5,7 @@ import {json} from '../utils/response.js';
 export const REQUIRED_TABLES = [
   'users', 'sessions', 'auth_attempts', 'spaces', 'folders', 'files',
   'storage_objects', 'upload_sessions', 'shares', 'trash_entries',
-  'app_settings', 'storage_cleanup_jobs'
+  'app_settings', 'storage_cleanup_jobs', 'maintenance_lock', 'maintenance_runs', 'operational_events', 'backup_records'
 ];
 function validBootstrapSecret(secret) {
   return typeof secret === 'string' && secret.length >= 32 &&

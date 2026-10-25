@@ -15,6 +15,7 @@ const backdrop = document.getElementById('mobile-backdrop');
 function closeMenu() {sidebar.classList.remove('open');backdrop.hidden=true;}
 function page() {const key=location.pathname.split('/')[1]||'files';return known.has(key)?key:'files';}
 function render() {
+ host.dataset.fileView='';
  const key=page();document.title=`${titles[key]} · CloudDrive`;document.getElementById('topbar-title').textContent=titles[key];
  document.querySelectorAll('#app-nav [data-route], .app-nav [data-route]').forEach(a=>{const active=a.dataset.route===key;a.classList.toggle('active',active);if(active)a.setAttribute('aria-current','page');else a.removeAttribute('aria-current')});
  if(key==='personal'||key==='spaces')renderSpaces(host,key==='personal');else if(['files','recent'].includes(key))renderFileManager(host,key);else if(key==='users')renderUsers(host);else if(key==='shares')renderShares(host);else if(key==='trash')renderTrash(host);else if(key==='settings')renderAdmin(host);else renderPlaceholder(host,key);
