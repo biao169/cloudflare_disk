@@ -33,3 +33,14 @@ Response envelope: `{ "success": true, "data": ... }` or `{ "success": false, "e
 - `GET/POST /api/v1/admin/backups/records`：手动备份登记（不等于校验完成）。
 
 Windows 真正的 D1+R2 备份与恢复见 [RC9_OPERATIONS.md](RC9_OPERATIONS.md)。
+
+
+## RC10：再次分享和原始链接管理
+
+- `GET /api/v1/shares?target_type=file&target_id={id}` 只列当前用户创建的分享记录，不返回 bearer token。
+- `GET /api/v1/shares/{id}/link` 对活跃、过期及下载耗尽的加密链接返回原 URL；必须具有有效创建者/资源权限。
+- `PATCH /api/v1/shares/{id}` 修改有效期、密码、下载开关或下载上限，不改变分享 URL。
+- `POST /api/v1/shares` 的可选 `require_recoverable: true` 要求正确配置稳定的 `SHARE_LINK_KEY`；不满足直接失败，不创建不能恢复的记录。
+- `shares.link_origin` 在 RC10 迁移中新增，用于新链接保存创建时的域名；旧链接若未保存域名则沿用当前访问域名。
+
+详情见 [RC10_EXISTING_SHARE_LINKS.md](RC10_EXISTING_SHARE_LINKS.md)。

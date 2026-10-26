@@ -29,7 +29,7 @@
   },
   "vars": {
     "APP_NAME": "CloudDrive",
-    "APP_STAGE": "rc9-operations",
+    "APP_STAGE": "rc10-existing-links",
     "PUBLIC_BASE_URL": ""
   },
   "r2_buckets": [

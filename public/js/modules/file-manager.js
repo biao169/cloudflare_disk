@@ -82,7 +82,7 @@ export async function renderFileManager(host,mode='files'){
  function itemButton(item){return btn(`${fileIcon(item)} ${item.name}`,()=>item.kind==='folder'?openFolder(item):canPreview(item)?preview(item):download(item),'btn btn-link text-start text-decoration-none cd-file-name');}
  function actionButtons(item){const wrap=el('div','d-flex flex-wrap gap-1 cd-file-actions');
   if(downloadable(item)){if(canPreview(item))wrap.append(btn('预览',()=>preview(item)));wrap.append(btn('下载',()=>download(item)));}
-  wrap.append(btn('分享',()=>share(item),'btn btn-sm btn-outline-primary'));
+  wrap.append(btn('分享 / 管理',()=>share(item),'btn btn-sm btn-outline-primary'));
   wrap.append(btn('移动',()=>move(item)));
   if(downloadable(item))wrap.append(btn('复制',()=>copy(item)));
   wrap.append(btn('重命名',()=>rename(item)));

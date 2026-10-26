@@ -61,11 +61,15 @@ export async function createShare(req,env,user,data){
  if(data.max_downloads!==undefined&&data.max_downloads!==null&&(!Number.isSafeInteger(data.max_downloads)||data.max_downloads<1||data.max_downloads>100000))return error('INVALID_SHARE','下载次数应在 1–100000 范围',400);
  if(type==='temporary'&&data.allow_download===false)return error('INVALID_SHARE','直链必须允许下载',400);
  if(linkKeyStatus(env)==='invalid')return error('LINK_KEY_INVALID','SHARE_LINK_KEY 格式必须为 64 位十六进制',503);
+ // The browser's Share dialog opts into guaranteed recoverability. Existing
+ // API clients retain legacy behavior unless they explicitly opt in.
+ if(data.require_recoverable!==undefined&&typeof data.require_recoverable!=='boolean')return error('INVALID_SHARE','require_recoverable 必须是布尔值',400);
+ if(data.require_recoverable&&linkKeyStatus(env)!=='ready')return error('SHARE_LINK_KEY_REQUIRED','请先在 Worker 运行时 Secrets 配置 SHARE_LINK_KEY，才能创建以后可重新获取的分享链接',503);
  if(!await target(db,user,targetType,id))return error('FORBIDDEN','没有分享权限或资源不可用',403);
  const token=randomToken(32),sid=uuid(),codeHash=await sha256(token),pw=data.password?await passwordHash(data.password):null;
  const encrypted=await encryptShareCode(env,sid,token),max=data.max_downloads??null;
- await execute(db,'INSERT INTO shares(id,type,target_type,target_id,share_code_hash,link_ciphertext,password_hash,expires_at,allow_download,max_downloads,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?)',[sid,type,targetType,id,codeHash,encrypted,pw,expiresAt,type==='page'&&data.allow_download===false?0:1,max,user.id]);
- const url=new URL(req.url);return ok({share:shareSummary({id:sid,type,target_type:targetType,target_id:id,expires_at:expiresAt,password_hash:pw,allow_download:type==='page'&&data.allow_download===false?0:1,max_downloads:max,download_count:0,link_ciphertext:encrypted,created_at:new Date().toISOString()}),url:sharePath(url.origin,type,token),link_recovery:encrypted?'recoverable':'rotation_only'},201);
+ const url=new URL(req.url);
+ await execute(db,'INSERT INTO shares(id,type,target_type,target_id,share_code_hash,link_ciphertext,password_hash,expires_at,allow_download,max_downloads,created_by,link_origin) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',[sid,type,targetType,id,codeHash,encrypted,pw,expiresAt,type==='page'&&data.allow_download===false?0:1,max,user.id,url.origin]);return ok({share:shareSummary({id:sid,type,target_type:targetType,target_id:id,expires_at:expiresAt,password_hash:pw,allow_download:type==='page'&&data.allow_download===false?0:1,max_downloads:max,download_count:0,link_ciphertext:encrypted,created_at:new Date().toISOString()}),url:sharePath(url.origin,type,token),link_recovery:encrypted?'recoverable':'rotation_only'},201);
 }
 export async function listOwnedShares(db,user){return many(db,'SELECT * FROM shares WHERE created_by=? ORDER BY created_at DESC LIMIT 100',[user.id]);}
 export function shareHeaders(){return {'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','Cross-Origin-Resource-Policy':'same-origin'};}

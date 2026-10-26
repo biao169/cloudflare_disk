@@ -27,22 +27,27 @@ export async function summarized(db,share){return shareSummary({...share,status:
 export async function recoverOwnedShare(req,env,db,user,share){
  if(!owns(share,user))return error('NOT_FOUND','分享不存在',404);
  const state=await stateForShare(db,share);
- if(state!=='active')return error('SHARE_NOT_ACTIVE','当前分享已失效，不能重新获取链接',409);
+ // Owners may recover the SAME URL for expired / download-limited shares to
+ // renew their validity without changing previously distributed bookmarks.
+ // Explicitly re-check permissions because status calculation stops at expiry.
+ if(!['active','expired','download_limit'].includes(state))return error('SHARE_NOT_ACCESSIBLE','分享已撤销、源文件不可用或权限失效，无法获取链接',409);
+ const creator=await one(db,'SELECT id,role,status FROM users WHERE id=?',[share.created_by]);
+ if(!creator||creator.status!=='active'||!await target(db,creator,share.target_type,share.target_id))return error('PERMISSION_REVOKED','没有此文件的有效分享权限',403);
  if(!share.link_ciphertext)return error('LINK_ROTATION_REQUIRED','旧链接仅存哈希，无法还原；请使用「轮换链接」生成新地址，原链接随即失效',409);
  if(linkKeyStatus(env)!=='ready')return error('SHARE_LINK_KEY_REQUIRED','重新获取链接需要已配置且保持不变的 SHARE_LINK_KEY',503);
  try{
   const code=await decryptShareCode(env,share.id,share.link_ciphertext);
   if(!/^[a-f0-9]{64}$/.test(code)||await sha256(code)!==share.share_code_hash)throw Error('Share key mismatch');
-  return ok({url:sharePath(new URL(req.url).origin,share.type,code),rotated:false});
+  return ok({url:sharePath(share.link_origin||new URL(req.url).origin,share.type,code),rotated:false});
  }catch{return error('LINK_DECRYPT_FAILED','原链接无法解密，请检查加密密钥是否发生变更；不要随意删除旧密钥',503);}
 }
 export async function rotateOwnedShare(req,env,db,user,share){
  if(!owns(share,user))return error('NOT_FOUND','分享不存在',404);
  if(await stateForShare(db,share)!=='active')return error('SHARE_NOT_ACTIVE','请先修复过期或权限状态，再轮换链接',409);
  if(linkKeyStatus(env)==='invalid')return error('LINK_KEY_INVALID','SHARE_LINK_KEY 必须是 64 位十六进制密钥',503);
- const code=randomToken(32),digest=await sha256(code),encrypted=await encryptShareCode(env,share.id,code);
+ const code=randomToken(32),digest=await sha256(code),encrypted=await encryptShareCode(env,share.id,code),origin=new URL(req.url).origin;
  const result=await batch(db,[
-  db.prepare('UPDATE shares SET share_code_hash=?,link_ciphertext=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND created_by=? AND revoked_at IS NULL').bind(digest,encrypted,share.id,user.id),
+  db.prepare('UPDATE shares SET share_code_hash=?,link_ciphertext=?,link_origin=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND created_by=? AND revoked_at IS NULL').bind(digest,encrypted,origin,share.id,user.id),
   db.prepare('DELETE FROM share_access WHERE share_id=?').bind(share.id)
  ]);
  if(!result[0].meta?.changes)return error('SHARE_NOT_ACTIVE','分享已撤销',409);

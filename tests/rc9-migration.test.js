@@ -11,8 +11,8 @@ test('RC9 additive upgrade from populated RC8 preserves users spaces files and s
  try{
   db.exec('PRAGMA foreign_keys=ON');
   const scripts=readdirSync(root).filter(n=>/^\d+.*\.sql$/.test(n)).sort();
-  const target='0015_rc9_operations.sql';assert.equal(scripts.at(-1),target);
-  for(const f of scripts.slice(0,-1))db.exec(readFileSync(join(root,f),'utf8'));
+  const target='0015_rc9_operations.sql';const index=scripts.indexOf(target);assert.ok(index>0);
+  for(const f of scripts.slice(0,index))db.exec(readFileSync(join(root,f),'utf8'));
   const uuid=()=>crypto.randomUUID();const user=uuid(),space=uuid(),object=uuid(),file=uuid(),key=`private/${space}/${object}`;
   db.prepare("INSERT INTO users(id,username,password_hash,role) VALUES(?,'production-account','legacy-hash','super_admin')").run(user);
   db.prepare("INSERT INTO spaces(id,name,type,owner_id,used_bytes) VALUES(?,'Production Space','personal',?,10)").run(space,user);

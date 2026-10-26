@@ -72,3 +72,16 @@ body { margin:0; font-family:system-ui,-apple-system,"Microsoft YaHei",sans-seri
  .cd-file-card {padding:10px!important}
  .cd-file-card .cd-file-actions .btn {flex:1 1 40%}
 }
+
+/* RC10: already-shared URLs appear first; keep long tokens readable on phones. */
+.cd-share-existing {max-height:47vh;overflow-y:auto;overscroll-behavior:contain}
+.cd-share-card {background:var(--bs-body-bg)}
+.cd-share-url .form-control {min-width:0;font-size:.77rem;font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
+.cd-share-editor .card-body {padding:1rem}
+.cd-share-create {padding-bottom:.3rem}
+@media(max-width:600px){
+ .cd-share-existing {max-height:50vh}
+ .cd-share-url {flex-wrap:wrap}
+ .cd-share-url .form-control {flex-basis:100%;width:100%;border-radius:.375rem!important}
+ .cd-share-url .btn {margin-top:.4rem;border-radius:.375rem!important;flex:1 1 100%}
+}

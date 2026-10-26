@@ -1,9 +1,9 @@
 {
   "name": "clouddrive",
-  "version": "1.0.0-rc.9",
+  "version": "1.0.0-rc.10",
   "private": true,
   "type": "module",
-  "description": "CloudDrive no-compile Workers + D1 + R2: production administration and recovery runbooks",
+  "description": "CloudDrive no-compile Workers + D1 + R2: existing link recovery and in-place share editing",
   "scripts": {
     "dev": "wrangler dev --local",
     "build": "npm run test:all",

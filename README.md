@@ -9,6 +9,12 @@
 
 > RC5 已修复“Worker/R2/D1 Binding 均创建成功，但 `/api/v1/health/ready` 始终返回 `D1_MIGRATIONS_REQUIRED`”的问题。原因之一是 Wrangler 的自动资源创建允许省略 `database_id`，而远程 D1 migrations 命令可能要求真实 `database_id`。RC5 在部署过程中自动发现并注入 ID 到一个**临时**配置文件，不修改或提交账号专属 ID。另修复 `0001_initial.sql` 中不适合 D1 迁移事务的 `PRAGMA foreign_keys = ON`。
 
+## RC10：再次分享直接显示原链接并编辑属性（推荐优先阅读）
+
+从文件列表或最近文件点击 **「分享 / 管理」**：先显示该文件由当前账号创建的已有分享；加密保存的原 URL 会自动读取最新一条并提供复制按钮。可以直接修改有效期、下载次数、页面下载开关、访问密码，**修改不会生成新链接**。已过期链接可以延长后继续使用原地址；永久公开 R2 的 URL 也在同一窗口管理。
+
+为确保以后能够找回新建的原始链接，建议事先在 Worker **运行时 Secret** 中配置并长期保留 `SHARE_LINK_KEY`（32 字节随机值，64 个十六进制字符）。**旧版只保存 SHA-256 摘要的链接无法恢复原令牌**：仅可主动轮换为新链接，旧地址立即失效。`0016_rc10_existing_links.sql` 只新增可空字段，保留原用户/文件/分享。Build Command `npm run build`、Deploy Command `npm run deploy` **不变**。详见 [RC10 改动与安全使用说明](docs/RC10_EXISTING_SHARE_LINKS.md)。
+
 ## RC9：生产运维仪表盘、容量预警、自动清理和完整备份恢复
 
 **保持 Cloudflare 免费架构和原有 Worker/D1/R2 不变。** RC9 新增 `0015_rc9_operations.sql`（只增表和索引）、持久化运行记录和异常事件、全局/空间配额预警、统一运维管理页面 `/settings`、带 D1 任务锁的 Cron 小批次清理，以及 Windows D1 SQL + 私有/公开双桶真正文件备份脚本。恢复默认只读预检查，真实恢复只允许新建隔离资源。

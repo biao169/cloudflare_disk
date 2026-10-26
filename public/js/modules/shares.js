@@ -18,7 +18,7 @@ export async function renderShares(host){
   for(const s of shown){const row=el('div','list-group-item d-flex flex-wrap align-items-center gap-2');
    const details=el('div','flex-grow-1');details.append(el('div','fw-semibold text-break',s.target_name||`${s.target_type==='folder'?'文件夹':'文件'}（源文件可能不可用）`));
    details.append(el('div','small text-secondary',`${s.type==='page'?'分享页面':'临时直链'} · ${shareStatusLabel(s.status)} · 到期 ${format(s.expires_at)}${s.has_password?' · 已设访问密码':''}${s.max_downloads?` · 下载 ${s.download_count}/${s.max_downloads}`:''}`));
-   row.append(details,button('管理 / 获取链接',()=>openShareDialog({id:s.target_id,kind:s.target_type,name:s.target_name||'已删除文件'},{isAdmin,onChanged:refresh,onCreated:refresh}),'btn btn-sm btn-outline-primary'));
+   row.append(details,button('查看原链接 / 编辑',()=>openShareDialog({id:s.target_id,kind:s.target_type,name:s.target_name||'已删除文件'},{isAdmin,onChanged:refresh,onCreated:refresh}),'btn btn-sm btn-outline-primary'));
    list.append(row);
   }
  }

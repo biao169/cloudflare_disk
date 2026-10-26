@@ -2,16 +2,19 @@ import {requestJSON} from '../api.js';
 
 const el=(tag,cls='',text='')=>{const n=document.createElement(tag);n.className=cls;n.textContent=text;return n;};
 const button=(text,fn,cls='btn btn-sm btn-outline-secondary')=>{const n=el('button',cls,text);n.type='button';n.onclick=fn;return n;};
+const visible=(node,yes)=>{node.hidden=!yes;node.classList.toggle('d-none',!yes);};
+const utcDate=raw=>{if(!raw)return null;const value=/^\d{4}-\d\d-\d\d /.test(raw)?raw.replace(' ','T')+'Z':raw;const d=new Date(value);return Number.isFinite(d.getTime())?d:null;};
+const format=raw=>utcDate(raw)?.toLocaleString('zh-CN')||(!raw?'永久':String(raw));
 const expiryDate=(choice,custom)=>{
  if(choice==='never')return null;
  if(choice==='custom'){
-  const d=new Date(custom);if(!custom||!Number.isFinite(d.getTime())||d.getTime()<=Date.now()||d.getTime()>Date.now()+366*86400000)throw Error('自定义有效期需在未来 366 天以内');
+  const d=new Date(custom);
+  if(!custom||!Number.isFinite(d.getTime())||d.getTime()<=Date.now()||d.getTime()>Date.now()+366*86400000)throw Error('自定义有效期需在未来 366 天以内');
   return d.toISOString();
  }
  const span={'1h':3600000,'1d':86400000,'7d':7*86400000,'30d':30*86400000}[choice];
  if(!span)throw Error('请选择有效期');return new Date(Date.now()+span).toISOString();
 };
-const format=raw=>{if(!raw)return '永久';const text=/^\d{4}-\d\d-\d\d /.test(raw)?raw.replace(' ','T')+'Z':raw;const d=new Date(text);return Number.isNaN(d.getTime())?String(raw):d.toLocaleString('zh-CN');};
 const statusLabels={active:'有效',expired:'已过期',revoked:'已撤销',download_limit:'下载次数耗尽',target_unavailable:'源文件已删除或不可用',creator_disabled:'分享者账号已停用',permission_revoked:'分享权限已撤销',ready:'已公开',source_unavailable:'源文件已删除',failed:'发布失败'};
 export function shareStatusLabel(code){return statusLabels[code]||'状态未知';}
 export function validShareOptions({mode,kind,expires,password}){
@@ -21,15 +24,23 @@ export function validShareOptions({mode,kind,expires,password}){
  if(mode!=='page'&&password)return false;
  return true;
 }
+/** Only the creator can retrieve a bearer link. Old SHA-256-only URLs are mathematically unrecoverable. */
+export function shareRecoveryState(share,keyStatus){
+ if(['revoked','target_unavailable','creator_disabled','permission_revoked'].includes(share.status))return 'unavailable';
+ if(!share.link_recoverable)return 'legacy';
+ if(keyStatus!=='ready')return 'missing_key';
+ return 'recoverable';
+}
+export function showExistingFirst(shares,publications=[]){return shares.length>0||publications.length>0;}
 function expiryControls(defaultValue='7d'){
  const wrap=el('div','mb-3');wrap.append(el('label','form-label','有效期'));
  const select=el('select','form-select form-select-sm');
- for(const [v,label] of [['1h','1 小时'],['1d','1 天'],['7d','7 天'],['30d','30 天'],['custom','自定义时间'],['never','永久']]){
+ for(const [v,label] of [['1h','1 小时'],['1d','1 天'],['7d','7 天'],['30d','30 天'],['custom','自定义日期'],['never','永久有效']]){
   const o=el('option','',label);o.value=v;select.append(o);
  }
  select.value=defaultValue;
  const custom=el('input','form-control form-control-sm mt-2');custom.type='datetime-local';custom.setAttribute('aria-label','自定义过期时间');
- const sync=()=>{custom.hidden=select.value!=='custom';};select.onchange=sync;sync();wrap.append(select,custom);
+ const sync=()=>visible(custom,select.value==='custom');select.onchange=sync;sync();wrap.append(select,custom);
  return {wrap,select,custom,value:()=>expiryDate(select.value,custom.value)};
 }
 function downloadLimit(value=null){
@@ -43,99 +54,190 @@ function passwordField(){
 }
 function allowField(checked=true){const wrap=el('label','form-check mb-3'),input=el('input','form-check-input');input.type='checkbox';input.checked=checked;wrap.append(input,el('span','form-check-label ms-2','允许下载'));return {wrap,input};}
 
-/** Identical Bootstrap manager for file-row Share and the global My Shares view. */
+/**
+ * Unified in-place sharing manager: opening an already-shared item displays
+ * existing records first. The recoverable original URL is automatically read
+ * for the newest accessible share and can be copied without creating another.
+ */
 export async function openShareDialog(item,{isAdmin=false,onCreated=()=>{},onChanged=()=>{}}={}){
  if(!window.bootstrap?.Modal)throw Error('Bootstrap 未加载');
- const kind=item.kind||'file',dialogRoot=el('div','modal fade');dialogRoot.tabIndex=-1;dialogRoot.setAttribute('aria-label','分享设置');
- const dialog=el('div','modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable'),content=el('div','modal-content');
- const header=el('div','modal-header');header.append(el('h2','modal-title fs-5',`分享 · ${item.name||'文件'}`));const close=el('button','btn-close');close.type='button';close.dataset.bsDismiss='modal';close.setAttribute('aria-label','关闭');header.append(close);
- const body=el('div','modal-body');const status=el('div','small mb-2');const existing=el('div','mb-4');body.append(status,existing);
- const output=el('div','d-none alert alert-info py-2');body.append(output);
- const createPanel=el('section','border-top pt-3');createPanel.append(el('h3','h6','创建新分享'));
+ const kind=item.kind||'file',knownUrls=new Map();
+ const root=el('div','modal fade');root.tabIndex=-1;root.setAttribute('aria-label','分享与链接管理');
+ const dialog=el('div','modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable');
+ const content=el('div','modal-content'),header=el('div','modal-header');
+ header.append(el('h2','modal-title fs-5',`分享与链接管理 · ${item.name||'文件'}`));
+ const close=el('button','btn-close');close.type='button';close.dataset.bsDismiss='modal';close.setAttribute('aria-label','关闭');header.append(close);
+ const body=el('div','modal-body'),status=el('div','small mb-2'),existing=el('section','mb-3');
+ const existingHeader=el('div','d-flex justify-content-between align-items-center gap-2 mb-2');
+ const existingTitle=el('h3','h6 mb-0','已有分享');
+ const refresh=button('刷新已有链接',()=>loadExisting());existingHeader.append(existingTitle,refresh);
+ const existingList=el('div','cd-share-existing');existing.append(existingHeader,existingList);
+ const createdLink=el('div','alert alert-info py-2');visible(createdLink,false);
+ const divider=el('div','border-top pt-3 mt-3');
+ const toggleNew=button('＋ 创建另一条分享链接',()=>{createTouched=true;setCreateOpen(!createOpen);},'btn btn-sm btn-outline-primary mb-3');
+ divider.append(toggleNew);
+ const createPanel=el('section','cd-share-create');createPanel.append(el('h3','h6','新建分享（已有链接不会改变）'));
  const mode=el('select','form-select form-select-sm mb-3');mode.setAttribute('aria-label','选择分享模式');
- for(const [value,name] of [['temporary','临时授权直链（直接下载）'],['page','文件分享页面（密码、预览）'],['public','永久公开直链（R2 / CDN）']]){
-  const o=el('option','',name);o.value=value;o.disabled=(kind==='folder'&&value!=='page')||(value==='public'&&!isAdmin);mode.append(o);
+ for(const [value,label] of [['temporary','临时授权直链（直接下载）'],['page','文件分享页面（密码与预览）'],['public','永久公开直链（R2 / CDN）']]){
+  const opt=el('option','',label);opt.value=value;opt.disabled=(kind==='folder'&&value!=='page')||(value==='public'&&!isAdmin);mode.append(opt);
  }
  mode.value=kind==='folder'?'page':'temporary';createPanel.append(mode);
  const expire=expiryControls(),limit=downloadLimit(),pw=passwordField(),allow=allowField();
  createPanel.append(expire.wrap,limit.wrap,pw.wrap,allow.wrap);
- const pubWarning=el('p','small text-warning');createPanel.append(pubWarning);
- const create=button('创建分享并复制链接',()=>{},'btn btn-primary');createPanel.append(create);body.append(createPanel);
+ const keyWarning=el('div','alert alert-warning small py-2');
+ const keyNotice=el('div','mb-2');keyWarning.append(keyNotice);
+ const optOut=el('label','form-check');const optOutInput=el('input','form-check-input');optOutInput.type='checkbox';
+ optOut.append(optOutInput,el('span','form-check-label ms-1','我了解本次创建的原始链接无法再次找回，仍要创建'));
+ keyWarning.append(optOut);createPanel.append(keyWarning);
+ const publicWarning=el('p','small text-warning');createPanel.append(publicWarning);
+ const create=button('创建并显示分享链接',()=>{},'btn btn-primary');createPanel.append(create);
+ divider.append(createPanel);body.append(status,existing,createdLink,divider);
  const footer=el('div','modal-footer');const done=button('关闭',()=>{},'btn btn-outline-secondary');done.dataset.bsDismiss='modal';footer.append(done);
- content.append(header,body,footer);dialog.append(content);dialogRoot.append(dialog);document.body.append(dialogRoot);
- const modal=new bootstrap.Modal(dialogRoot);
+ content.append(header,body,footer);dialog.append(content);root.append(dialog);document.body.append(root);
+ const modal=new window.bootstrap.Modal(root);
+ let keyStatus='not_configured',createOpen=true,createTouched=false,fetchSeq=0,activeEditor=null;
+ let destroyed=false;
  function note(message,cls='text-danger'){status.className=`small mb-2 ${cls}`;status.textContent=message;}
- async function reveal(url,message='分享链接（请妥善保管）'){
-  output.replaceChildren(el('div','fw-semibold small mb-2',message));const line=el('div','input-group input-group-sm');
-  const field=el('input','form-control');field.readOnly=true;field.value=url;field.setAttribute('aria-label','分享链接');
-  const copy=button('复制',async()=>{try{await navigator.clipboard.writeText(url);note('链接已复制','text-success');}catch{field.focus();field.select();note('请手动复制已选中的链接','text-warning');}},'btn btn-outline-primary');
-  line.append(field,copy);output.append(line);output.classList.remove('d-none');
+ function setCreateOpen(yes){createOpen=yes;visible(createPanel,yes);toggleNew.textContent=yes?'收起新建分享':'＋ 创建另一条分享链接';}
+ async function copyUrl(url,field){try{await navigator.clipboard.writeText(url);note('链接已复制','text-success');}catch{field.focus();field.select();note('已选中链接，请按 Ctrl+C 复制','text-warning');}}
+ function displayUrl(host,url,label='原始分享链接（保持不变）'){
+  host.replaceChildren(el('div','small text-secondary mt-2 mb-1',label));
+  const group=el('div','input-group input-group-sm cd-share-url');
+  const field=el('input','form-control');field.value=url;field.readOnly=true;field.setAttribute('aria-label','可复制的原始分享地址');
+  group.append(field,button('复制链接',()=>copyUrl(url,field),'btn btn-outline-primary'));host.append(group);
  }
- function syncCreation(){const v=mode.value;expire.wrap.hidden=v==='public';const never=expire.select.querySelector('option[value="never"]');never.disabled=v==='temporary';if(never.disabled&&expire.select.value==='never')expire.select.value='7d';expire.select.onchange();
-  limit.wrap.hidden=v==='public';pw.wrap.hidden=v!=='page';allow.wrap.hidden=v!=='page';pubWarning.textContent=v==='public'?'公开直链无法设置密码和有效期。未设置 R2 自定义域名时会通过 Worker 提供；CDN 已缓存的文件撤销后可能仍能被读取。':'';
+ function syncCreate(){const v=mode.value;visible(expire.wrap,v!=='public');
+  const never=expire.select.querySelector('option[value="never"]');never.disabled=v==='temporary';
+  if(never.disabled&&expire.select.value==='never')expire.select.value='7d';expire.select.onchange();
+  visible(limit.wrap,v!=='public');visible(pw.wrap,v==='page');visible(allow.wrap,v==='page');
+  visible(keyWarning,v!=='public'&&keyStatus!=='ready');
+  keyNotice.textContent=keyStatus==='invalid'?'SHARE_LINK_KEY 格式错误。请管理员配置 64 位十六进制密钥；当前无法安全创建可恢复链接。':'未配置 SHARE_LINK_KEY。新建链接将无法再次获取原地址，建议管理员先在 Worker Runtime Secrets 中配置。';
+  visible(optOut,keyStatus==='not_configured');
+  visible(publicWarning,v==='public');
+  publicWarning.textContent=v==='public'?'永久公开直链不支持密码或有效期。CDN 缓存撤销后仍可能短暂可访问。':'';
+  create.disabled=v!=='public'&&(keyStatus==='invalid'||(keyStatus==='not_configured'&&!optOutInput.checked));
  }
- mode.onchange=syncCreation;syncCreation();
- async function existingShares(){
-  existing.replaceChildren(el('p','text-secondary small','正在读取已有分享…'));
-  try{
-   const params=new URLSearchParams({target_type:kind,target_id:item.id});
-   const data=await requestJSON(`/api/v1/shares?${params}`);const shares=data.shares||[];
-   existing.replaceChildren(el('h3','h6','已有分享链接'));
-   if(data.link_key_status!=='ready')existing.append(el('p','small text-warning',data.link_key_status==='not_configured'?'未设置 SHARE_LINK_KEY：新链接只能轮换生成，不能再次读取原地址。':'SHARE_LINK_KEY 配置有误，暂不能安全保存新链接。'));
-   if(!shares.length)existing.append(el('div','small text-secondary mb-2','尚无分享记录'));
-   for(const s of shares){
-    const panel=el('div','border rounded-3 p-2 mb-2');const heading=el('div','fw-semibold small',`${s.type==='page'?'分享页面':'临时直链'} · ${shareStatusLabel(s.status)}`);
-    panel.append(heading,el('div','small text-secondary',`到期：${format(s.expires_at)} · ${s.has_password?'有密码':'无密码'} · ${s.allow_download?'允许下载':'禁止下载'}${s.max_downloads?` · 已下载 ${s.download_count}/${s.max_downloads}`:''}`));
-    const actions=el('div','d-flex flex-wrap gap-2 mt-2');const active=s.status==='active';
-    if(active){
-     actions.append(button(s.link_recoverable?'重新获取原链接':'轮换并获取新链接',async()=>{
-      if(!s.link_recoverable&&!confirm('旧链接无法还原。轮换后旧链接立即失效，是否继续？'))return;
-      try{const r=await requestJSON(s.link_recoverable?`/api/v1/shares/${s.id}/link`:`/api/v1/shares/${s.id}/rotate`,{method:s.link_recoverable?'GET':'POST'});await reveal(r.url,r.rotated?'已轮换链接，旧地址失效':'已安全取回原链接');if(r.rotated){note('链接已轮换，旧链接立即失效','text-success');await existingShares();onChanged();}}
-      catch(e){note(e.message);}
-     },'btn btn-sm btn-outline-primary'));
-     actions.append(button('轮换链接',async()=>{if(!confirm('轮换后旧地址会立即失效，确定吗？'))return;
-      try{const r=await requestJSON(`/api/v1/shares/${s.id}/rotate`,{method:'POST'});await reveal(r.url,'轮换成功，请复制新链接');await existingShares();onChanged();}catch(e){note(e.message);}
-     }));
-    }
-    if(!s.revoked_at&&['active','expired','download_limit'].includes(s.status))actions.append(button('编辑权限 / 期限',()=>edit(s),'btn btn-sm btn-outline-secondary'));
-    if(!s.revoked_at)actions.append(button('撤销',async()=>{if(!confirm('撤销分享后原链接将永久失效，确认？'))return;try{await requestJSON(`/api/v1/shares/${s.id}`,{method:'DELETE'});note('分享已撤销','text-success');await existingShares();onChanged();}catch(e){note(e.message);}},'btn btn-sm btn-outline-danger'));
-    panel.append(actions);existing.append(panel);
-   }
-   if(isAdmin&&kind==='file'){
-    const result=await requestJSON(`/api/v1/publications?file_id=${encodeURIComponent(item.id)}`);
-    if(result.publications.length){existing.append(el('h3','h6 mt-3','永久公开直链'));
-     for(const p of result.publications){const panel=el('div','border rounded-3 p-2 mb-2');panel.append(el('div','small fw-semibold',`公开 R2 · ${shareStatusLabel(p.status)} · ${p.delivery==='cdn'?'CDN 域名':'Worker 访问'}`));
-      const row=el('div','d-flex flex-wrap gap-2 mt-2');if(p.status==='ready'&&p.url)row.append(button('获取公开链接',()=>reveal(p.url,'永久公开链接')));
-      if(p.status==='ready')row.append(button('撤销公开',async()=>{if(!confirm('公开 CDN 缓存可能继续存在。确认撤销 R2 公开副本？'))return;try{const r=await requestJSON(`/api/v1/publications/${p.id}`,{method:'DELETE'});note(r.warning,'text-warning');await existingShares();onChanged();}catch(e){note(e.message);}},'btn btn-sm btn-outline-danger'));
-      panel.append(row);existing.append(panel);
-     }
-    }
-    const text=result.cdn_configured?`公开 CDN 已配置：${result.cdn_base_url}${result.purge_configured?' · 已配置自动缓存清理':' · 建议配置缓存清理 Secret'}`:'未设置 PUBLIC_BASE_URL：公开文件通过 Worker /p/ 访问，不享受独立 R2 CDN 直连。';
-    existing.append(el('div','small text-secondary mt-2',text));
-   }
-  }catch(err){existing.replaceChildren(el('div','alert alert-warning small',err.message));}
+ mode.onchange=syncCreate;optOutInput.onchange=syncCreate;
+ function panelMessage(panel,message,variant='warning'){
+  let alert=panel.querySelector('.cd-share-row-message');
+  if(!alert){alert=el('div','cd-share-row-message mt-2 small');panel.append(alert);}
+  alert.className=`cd-share-row-message mt-2 small text-${variant}`;alert.textContent=message;
  }
- function edit(s){
-  const panel=el('div','card border-primary mt-2'),form=el('div','card-body');panel.append(form);form.append(el('h4','h6','编辑现有分享：不改变分享链接'));
-  const expiry=expiryControls(s.expires_at?'custom':'never');if(s.expires_at){const d=new Date(/^\d{4}-\d\d-\d\d /.test(s.expires_at)?s.expires_at.replace(' ','T')+'Z':s.expires_at);const local=new Date(d.getTime()-d.getTimezoneOffset()*60000);expiry.custom.value=local.toISOString().slice(0,16);expiry.custom.hidden=false;}
+ async function retrieve(s,card,urlHolder){
+  if(knownUrls.has(s.id)){displayUrl(urlHolder,knownUrls.get(s.id));return;}
+  urlHolder.replaceChildren(el('span','small text-secondary','正在安全获取原链接…'));
+  try{const result=await requestJSON(`/api/v1/shares/${s.id}/link`);if(destroyed)return;
+   knownUrls.set(s.id,result.url);displayUrl(urlHolder,result.url);
+  }catch(err){if(!destroyed){urlHolder.replaceChildren();panelMessage(card,err.message,'danger');}}
+ }
+ async function rotate(s,card){
+  if(keyStatus!=='ready')return panelMessage(card,'请先配置正确的 SHARE_LINK_KEY，以保证生成的新链接以后仍可找回。','danger');
+  if(!window.confirm('轮换链接后，原地址立即失效，已经发给别人的旧链接将无法访问。确定继续？'))return;
+  try{const result=await requestJSON(`/api/v1/shares/${s.id}/rotate`,{method:'POST'});
+   knownUrls.set(s.id,result.url);note('已轮换为新地址，旧链接立即失效','text-success');await loadExisting();onChanged();
+  }catch(err){panelMessage(card,err.message,'danger');}
+ }
+ function editorFor(s,card){
+  if(activeEditor?.isConnected)activeEditor.remove();
+  const panel=el('div','card mt-3 border-primary cd-share-editor');const form=el('div','card-body');panel.append(form);
+  form.append(el('h4','h6','修改现有链接的属性（URL 不变）'));
+  const expired=s.status==='expired';const expiry=expiryControls(s.expires_at&&!expired?'custom':s.expires_at?'7d':'never');
+  if(s.expires_at&&!expired){const dt=utcDate(s.expires_at);if(dt){expiry.custom.value=new Date(dt.getTime()-dt.getTimezoneOffset()*60000).toISOString().slice(0,16);visible(expiry.custom,true);}}
+  const never=expiry.select.querySelector('option[value="never"]');never.disabled=s.type==='temporary';
   const max=downloadLimit(s.max_downloads),allowed=allowField(s.allow_download);form.append(expiry.wrap,max.wrap);
   if(s.type==='page')form.append(allowed.wrap);
-  const passAction=el('select','form-select form-select-sm mb-2');for(const [v,label] of [['keep','不修改访问密码'],['replace','设置新密码'],['clear','移除密码']]){const o=el('option','',label);o.value=v;passAction.append(o);}
-  const password=passwordField();password.wrap.hidden=true;passAction.onchange=()=>password.wrap.hidden=passAction.value!=='replace';if(s.type==='page')form.append(passAction,password.wrap);
-  const notice=el('div','small text-warning mb-2','修改或移除密码将使原先已验证的访客会话失效。');if(s.type==='page')form.append(notice);
-  const save=button('保存修改',async()=>{try{
-   const body={expires_at:expiry.value(),max_downloads:max.value()};if(s.type==='page'){body.allow_download=allowed.input.checked;body.password_action=passAction.value;if(passAction.value==='replace')body.password=password.input.value;}
-   save.disabled=true;await requestJSON(`/api/v1/shares/${s.id}`,{method:'PATCH',body});note('分享设置已保存','text-success');await existingShares();onChanged();
-  }catch(e){note(e.message);}finally{save.disabled=false;}},'btn btn-sm btn-primary');const cancel=button('取消',()=>panel.remove());form.append(save,el('span','ms-2'),cancel);existing.prepend(panel);
+  const pwAction=el('select','form-select form-select-sm mb-2');
+  for(const [value,label] of [['keep','保留现有访问密码'],['replace','设置或更换访问密码'],['clear','移除访问密码']]){
+   const opt=el('option','',label);opt.value=value;pwAction.append(opt);
+  }
+  const password=passwordField();visible(password.wrap,false);pwAction.onchange=()=>visible(password.wrap,pwAction.value==='replace');
+  if(s.type==='page')form.append(pwAction,password.wrap,el('div','small text-secondary mb-2','更换或移除密码后，之前已验证的访客需重新验证。'));
+  const controls=el('div','d-flex gap-2 flex-wrap');const save=button('保存修改（保留原链接）',async()=>{
+   try{const payload={expires_at:expiry.value(),max_downloads:max.value()};
+    if(s.type==='page'){payload.allow_download=allowed.input.checked;payload.password_action=pwAction.value;if(pwAction.value==='replace')payload.password=password.input.value;}
+    save.disabled=true;await requestJSON(`/api/v1/shares/${s.id}`,{method:'PATCH',body:payload});
+    note('已修改属性，原分享链接保持不变','text-success');await loadExisting();onChanged();
+   }catch(err){panelMessage(panel,err.message,'danger');}finally{save.disabled=false;}
+  },'btn btn-sm btn-primary');
+  controls.append(save,button('取消',()=>{panel.remove();activeEditor=null;}));form.append(controls);card.append(panel);activeEditor=panel;
  }
- create.onclick=async()=>{const v=mode.value;note('');
-  if(!validShareOptions({mode:v,kind,expires:expire.select.value,password:v==='page'?pw.input.value:''}))return note('当前模式不适用于此文件或文件夹');
-  if(v==='page'&&pw.input.value){const n=Array.from(pw.input.value).length;if(n<12||n>128)return note('分享访问密码需要 12–128 字符');}
+ async function loadExisting(){
+  const seq=++fetchSeq;refresh.disabled=true;existingList.replaceChildren(el('div','text-secondary small','正在读取已有分享…'));
   try{
-   const body=v==='public'?{file_id:item.id}:{type:v,target_type:kind,target_id:item.id,expires_at:expire.value(),max_downloads:limit.value(),allow_download:v==='page'?allow.input.checked:true,...(v==='page'&&pw.input.value?{password:pw.input.value}:{})};
-   create.disabled=true;const result=await requestJSON(v==='public'?'/api/v1/publications':'/api/v1/shares',{method:'POST',body});
-   await reveal(result.url,'分享创建成功，请复制链接');pw.input.value='';note(result.warning||'创建成功','text-success');await existingShares();onCreated(result);onChanged();
-  }catch(err){note(err.message);}finally{create.disabled=false;}
+   const params=new URLSearchParams({target_type:kind,target_id:item.id});
+   const data=await requestJSON(`/api/v1/shares?${params}`);
+   if(destroyed||seq!==fetchSeq)return;keyStatus=data.link_key_status;
+   const shares=(data.shares||[]).sort((a,b)=>(a.status==='active'?0:1)-(b.status==='active'?0:1));
+   let publications=[];let pubMeta=null;
+   if(isAdmin&&kind==='file'){
+    try{pubMeta=await requestJSON(`/api/v1/publications?file_id=${encodeURIComponent(item.id)}`);publications=pubMeta.publications||[];}
+    catch(err){panelMessage(existing,`读取公开链接失败：${err.message}`,'warning');}
+   }
+   if(destroyed||seq!==fetchSeq)return;
+   existingList.replaceChildren();existingTitle.textContent=`已有分享 (${shares.length+publications.length})`;
+   if(!shares.length&&!publications.length)existingList.append(el('p','text-secondary small','此文件尚未由当前账号创建分享。可以在下方新建链接。'));
+   else existingList.append(el('p','text-secondary small mb-2','这里只显示由当前账号创建的私密分享；您可以直接取回原链接，编辑属性无需重新分享。'));
+   if(!createTouched)setCreateOpen(!showExistingFirst(shares,publications));else setCreateOpen(createOpen);
+   if(keyStatus!=='ready'&&shares.length){
+    const message=keyStatus==='invalid'?'SHARE_LINK_KEY 格式不正确，无法解密原链接。请检查 Worker 的 Secret。':'未配置 SHARE_LINK_KEY。旧链接仍可访问，但未加密保存的链接无法反向找回。';
+    existingList.append(el('div','small alert alert-warning py-2',message));
+   }
+   let autoLoad=null;
+   for(const s of shares){
+    const card=el('div','border rounded-3 p-3 mb-2 cd-share-card');const top=el('div','d-flex justify-content-between align-items-start gap-2');
+    top.append(el('div','fw-semibold small',s.type==='page'?'分享页面':'临时授权直链'));
+    const badge=el('span',`badge ${s.status==='active'?'text-bg-success':s.status==='expired'||s.status==='download_limit'?'text-bg-warning':'text-bg-secondary'}`,shareStatusLabel(s.status));top.append(badge);card.append(top);
+    card.append(el('div','small text-secondary mt-1',`到期：${format(s.expires_at)} · ${s.has_password?'有密码':'无密码'} · ${s.allow_download?'允许下载':'禁止下载'} · ${s.max_downloads?`已下载 ${s.download_count}/${s.max_downloads}`:'不限下载次数'}`));
+    const urlHolder=el('div','cd-share-link-holder');card.append(urlHolder);
+    const state=shareRecoveryState(s,keyStatus),actions=el('div','d-flex flex-wrap gap-2 mt-2');
+    if(knownUrls.has(s.id))displayUrl(urlHolder,knownUrls.get(s.id));
+    else if(state==='recoverable'){
+     actions.append(button('查看 / 复制原链接',()=>retrieve(s,card,urlHolder),'btn btn-sm btn-outline-primary'));
+     if(!autoLoad&&['active','expired','download_limit'].includes(s.status))autoLoad=()=>retrieve(s,card,urlHolder);
+    }else if(state==='legacy')card.append(el('div','small text-warning mt-2','这是旧版分享：只保存了令牌哈希，无法找回原地址。可在配置密钥后轮换出新地址，但会使旧链接失效。'));
+    else if(state==='missing_key')card.append(el('div','small text-warning mt-2','该链接有加密记录，但当前缺少正确的 SHARE_LINK_KEY。请恢复原密钥，不要随意轮换。'));
+    else card.append(el('div','small text-secondary mt-2','该分享已失效，不能取回或使用原链接。'));
+    if(['active','expired','download_limit'].includes(s.status)){
+     actions.append(button('编辑期限 / 密码 / 权限',()=>editorFor(s,card),'btn btn-sm btn-outline-secondary'));
+     if(s.status==='active'&&keyStatus==='ready')actions.append(button('轮换链接',()=>rotate(s,card)));
+     if(s.status==='expired')card.append(el('div','small text-warning mt-2','链接已经过期；修改有效期为未来日期后，原 URL 可以继续使用。'));
+    }
+    if(!s.revoked_at)actions.append(button('撤销',async()=>{
+     if(!window.confirm('撤销后原链接将永久失效，确定吗？'))return;
+     try{await requestJSON(`/api/v1/shares/${s.id}`,{method:'DELETE'});knownUrls.delete(s.id);note('已撤销分享','text-success');await loadExisting();onChanged();}
+     catch(err){panelMessage(card,err.message,'danger');}
+    },'btn btn-sm btn-outline-danger'));
+    card.append(actions);existingList.append(card);
+   }
+   if(publications.length){existingList.append(el('h4','h6 mt-3','永久公开直链'));
+    for(const p of publications){const card=el('div','border rounded-3 p-3 mb-2');card.append(el('div','small fw-semibold',`公开 R2 · ${shareStatusLabel(p.status)} · ${p.delivery==='cdn'?'CDN 直连':'Worker 访问'}`));
+     if(p.status==='ready'&&p.url){const holder=el('div','mt-1');displayUrl(holder,p.url,'永久公开直链');card.append(holder);
+      card.append(button('撤销公开',async()=>{if(!window.confirm('撤销公开文件后 CDN 与浏览器缓存仍可能暂时保留。确认撤销？'))return;
+       try{const result=await requestJSON(`/api/v1/publications/${p.id}`,{method:'DELETE'});note(result.warning||'公开发布已撤销','text-warning');await loadExisting();onChanged();}
+       catch(err){panelMessage(card,err.message,'danger');}
+      },'btn btn-sm btn-outline-danger mt-2'));
+     }existingList.append(card);
+    }
+    if(pubMeta)existingList.append(el('p','small text-secondary',pubMeta.cdn_configured?`CDN：${pubMeta.cdn_base_url}`:'公开直链当前通过 Worker /p/ 提供（尚未设置 R2 自定义 CDN 域名）'));
+   }
+   syncCreate();
+   if(autoLoad)await autoLoad();
+  }catch(err){if(seq===fetchSeq&&!destroyed)existingList.replaceChildren(el('div','alert alert-warning small',err.message));}
+  finally{if(seq===fetchSeq)refresh.disabled=false;}
+ }
+ create.onclick=async()=>{
+  const v=mode.value;note('');
+  if(!validShareOptions({mode:v,kind,expires:expire.select.value,password:v==='page'?pw.input.value:''}))return note('当前分享模式不适用于此文件或文件夹');
+  if(v==='page'&&pw.input.value){const n=Array.from(pw.input.value).length;if(n<12||n>128)return note('分享访问密码需要 12–128 个字符');}
+  if(v!=='public'&&keyStatus==='not_configured'&&!optOutInput.checked)return note('请先配置 SHARE_LINK_KEY，或明确确认这条链接只能在创建时复制');
+  if(v!=='public'&&keyStatus==='invalid')return note('SHARE_LINK_KEY 格式错误，请管理员检查');
+  try{
+   const payload=v==='public'?{file_id:item.id}:{type:v,target_type:kind,target_id:item.id,expires_at:expire.value(),max_downloads:limit.value(),allow_download:v==='page'?allow.input.checked:true,require_recoverable:!optOutInput.checked,...(v==='page'&&pw.input.value?{password:pw.input.value}:{})};
+   create.disabled=true;const result=await requestJSON(v==='public'?'/api/v1/publications':'/api/v1/shares',{method:'POST',body:payload});
+   const urlHolder=el('div');displayUrl(urlHolder,result.url,'新分享已创建，请复制链接');createdLink.replaceChildren(urlHolder);visible(createdLink,true);
+   note(result.warning||'创建成功','text-success');pw.input.value='';optOutInput.checked=false;await loadExisting();onCreated(result);onChanged();
+  }catch(err){note(err.message);}finally{create.disabled=false;syncCreate();}
  };
- dialogRoot.addEventListener('hidden.bs.modal',()=>{modal.dispose();dialogRoot.remove()},{once:true});modal.show();await existingShares();
+ root.addEventListener('hidden.bs.modal',()=>{destroyed=true;knownUrls.clear();modal.dispose();root.remove();},{once:true});
+ setCreateOpen(true);modal.show();await loadExisting();
 }
