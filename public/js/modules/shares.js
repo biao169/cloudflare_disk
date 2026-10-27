@@ -1,5 +1,6 @@
 import {requestJSON} from '../api.js';
 import {openShareDialog,shareStatusLabel} from '../components/share-dialog.js';
+import {openPublicationManager} from '../components/publication-manager.js';
 const el=(tag,cls='',text='')=>{const n=document.createElement(tag);n.className=cls;n.textContent=text;return n;};
 const button=(name,fn,cls='btn btn-sm btn-outline-secondary')=>{const b=el('button',cls,name);b.type='button';b.onclick=fn;return b;};
 const format=raw=>{if(!raw)return '永久';const v=/^\d{4}-\d\d-\d\d /.test(raw)?raw.replace(' ','T')+'Z':raw;const d=new Date(v);return Number.isNaN(d.getTime())?raw:d.toLocaleString('zh-CN');};
@@ -24,12 +25,12 @@ export async function renderShares(host){
  }
  function drawPublications(meta){publicationArea.replaceChildren();if(!isAdmin)return;
   publicationArea.append(el('h2','h5','永久公开直链（R2）'));
-  publicationArea.append(el('p','small text-secondary',meta.cdn_configured?`CDN 已配置：${meta.cdn_base_url}${meta.purge_configured?' · 已配置自动清理缓存':' · 未配置自动缓存清理'}`:'未绑定 R2 CDN 自定义域名，公开文件会通过 Worker /p/ 代理访问。'));
+  publicationArea.append(el('p','small text-secondary',meta.cdn_configured?`CDN 已配置：${meta.cdn_base_url}${meta.purge_configured?' · 已配置自动清理缓存':' · 未配置自动缓存清理'}`:'未绑定 R2 CDN 自定义域名时，/r/ 由 Worker 流式提供最新公开版本。'));
   if(!publications.length){publicationArea.append(el('div','small text-secondary','尚无公开发布记录'));return;}
   const wrap=el('div','list-group');for(const pub of publications){const row=el('div','list-group-item d-flex align-items-center flex-wrap gap-2');
-   const label=el('div','flex-grow-1');label.append(el('div','fw-semibold text-break',pub.name||pub.public_path),el('div','text-secondary small',`${shareStatusLabel(pub.status)} · ${pub.delivery==='cdn'?'CDN 直连':'Worker 访问'} · ${format(pub.created_at)}`));
+   const label=el('div','flex-grow-1');label.append(el('div','fw-semibold text-break',pub.name||pub.public_path),el('div','text-secondary small',`${shareStatusLabel(pub.status)} · ${pub.delivery==='cdn'?'智能 CDN':'Worker'} · 发布 V${pub.published_revision??'?' } · ${pub.sync_state==='ready'?'旧地址已同步':'旧地址待同步'} · ${format(pub.created_at)}`));
    row.append(label);
-   if(pub.status==='ready'&&pub.url){row.append(button('复制公开链接',async()=>{try{await navigator.clipboard.writeText(pub.url);info('链接已复制','alert-success');}catch{info(`请手动复制公开 URL：${pub.url}`,'alert-warning');}},'btn btn-sm btn-outline-primary'));
+   if(pub.status==='ready'&&pub.url){row.append(button('版本与同步',()=>openPublicationManager(pub,{onChanged:refresh}),'btn btn-sm btn-outline-primary'));row.append(button('复制智能永久链接',async()=>{try{await navigator.clipboard.writeText(pub.url);info('链接已复制','alert-success');}catch{info(`请手动复制公开 URL：${pub.url}`,'alert-warning');}},'btn btn-sm btn-outline-primary'));
     row.append(button('撤销公开',async()=>{if(!confirm('确定撤销 R2 公开副本？CDN 缓存可能仍有效。'))return;try{const r=await requestJSON(`/api/v1/publications/${pub.id}`,{method:'DELETE'});info(r.warning,'alert-warning');await refresh();}catch(e){info(e.message,'alert-danger');}},'btn btn-sm btn-outline-danger'));
    }
    wrap.append(row);

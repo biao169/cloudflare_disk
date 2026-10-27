@@ -60,7 +60,8 @@ test('real SQL + R2: password share, expiry, cancel, public publication',async t
  const revoke=await api(env,`/api/v1/shares/${share.data.data.share.id}`,{method:'DELETE',cookie});assert.equal(revoke.status,200);
  assert.equal((await api(env,`${base}/contents`,{cookie:shareCookie})).status,404);
  const published=await api(env,'/api/v1/publications',{method:'POST',cookie,body:{file_id:fid}});assert.equal(published.status,201,JSON.stringify(published.data));
- assert.ok(published.data.data.url.startsWith('https://cdn.example.test/published/'));
+ assert.match(published.data.data.url,/^http:\/\/localhost:8787\/r\/[0-9a-f-]{36}$/);
+ assert.ok(published.data.data.legacy_url.startsWith('https://cdn.example.test/published/')); 
  assert.equal(env.PUBLIC_BUCKET.objects.size,1);
  assert.equal(env.DB.query('SELECT used_bytes FROM spaces WHERE id=?',spaceId).used_bytes,2*new TextEncoder().encode('%PDF-1.6\nHi').length,'public copy charges physical quota');
  const removed=await api(env,`/api/v1/publications/${published.data.data.id}`,{method:'DELETE',cookie});assert.equal(removed.status,200);

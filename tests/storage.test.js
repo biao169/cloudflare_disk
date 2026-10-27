@@ -4,7 +4,7 @@ import {MAX_UPLOAD_BYTES,uploadInputs,storageBinding,destinationAllowed} from '.
 const uid='11111111-1111-4111-8111-111111111111';
 test('upload parser accepts a small upload',()=>{
  const req=new Request(`http://localhost/api/v1/storage/upload?space_id=${uid}&name=hello.txt`,{method:'POST',headers:{'content-length':'4'},body:'test'});
- assert.deepEqual(uploadInputs(req,new URL(req.url)),{size:4,name:'hello.txt',spaceId:uid,folderId:null});
+ assert.deepEqual(uploadInputs(req,new URL(req.url)),{size:4,name:'hello.txt',spaceId:uid,folderId:null,replaceFileId:null,expectedRevision:null});
 });
 test('upload rejects missing size, invalid path, or oversized file',()=>{
  const u=new URL(`http://localhost/api/v1/storage/upload?space_id=${uid}&name=x.txt`);

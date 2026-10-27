@@ -23,9 +23,10 @@ export async function authRoute(request,env,path){
  }
  if(path==='/api/v1/auth/login'&&method==='POST'){
    const body=await jsonBody(request);if(!validUsername(body?.username)||!validPassword(body?.password))return error('INVALID_CREDENTIALS','用户名或密码错误',401);
-   const key=await sha256(`${ipKey(request)}:${body.username.toLowerCase()}`);if(await blocked(db,key))return error('TOO_MANY_ATTEMPTS','登录尝试过多，请稍后再试',429);
+   const ip=ipKey(request),key=await sha256(`login:user-ip:${ip}:${body.username.toLowerCase()}`),ipBucket=await sha256(`login:ip:${ip}`);
+   if(await blocked(db,key)||await blocked(db,ipBucket))return error('TOO_MANY_ATTEMPTS','登录尝试过多，请稍后再试',429);
    const user=await one(db,'SELECT * FROM users WHERE username=? COLLATE NOCASE',[body.username]);
-   if(!user || user.status!=='active' || !(await checkPassword(body.password,user.password_hash))){await failed(db,key);return error('INVALID_CREDENTIALS','用户名或密码错误',401);}
+   if(!user || user.status!=='active' || !(await checkPassword(body.password,user.password_hash))){await failed(db,key);await failed(db,ipBucket,30);return error('INVALID_CREDENTIALS','用户名或密码错误',401);}
    await ensurePersonal(db,user);await clearFailures(db,key);const cookie=await newSession(db,user.id,request);return json({success:true,data:{user:safeUser(user)}},200,{'Set-Cookie':cookie});
  }
  const user=await resolveUser(request,env);

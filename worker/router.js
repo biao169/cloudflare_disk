@@ -1,3 +1,6 @@
+import {replacementRoute,versionRoutePattern} from './api/replacements.js';
+import {textEditorRoute,textRoutePattern} from './api/text-editor.js';
+import {folderSyncRoute} from './api/folder-sync.js';
 import {recordIncident} from './services/operations.js';
 import {readinessResponse} from './services/readiness.js';
 import {adminRoute} from './api/admin.js';
@@ -7,6 +10,8 @@ import {uploadRoute} from './api/uploads.js';
 import {storageRoute} from './api/storage.js';
 import {fileManagementRoute} from './api/files.js';
 import {fileBrowserRoute} from './api/file-browser.js';
+import {favoriteRoute} from './api/favorites.js';
+import {globalSearchRoute} from './api/global-search.js';
 import {spacesRoute} from './api/spaces.js';
 import {json,ok,error} from './utils/response.js';
 import {databaseStatus} from './api/database.js';
@@ -20,12 +25,17 @@ export async function route(request,env){
  if(!pathname.startsWith('/api/'))return null;
  try{
   if(!['GET','HEAD','OPTIONS'].includes(request.method)&&!(await csrfAllowed(request)))return error('INVALID_ORIGIN','跨站请求被拒绝',403);
+  if(pathname.startsWith('/api/v1/folder-sync/'))return await folderSyncRoute(request,env,pathname);
   if(pathname.startsWith('/api/v1/admin/'))return await adminRoute(request,env,pathname);
   if(pathname==='/api/v1/trash'||pathname.startsWith('/api/v1/trash/'))return await trashRoute(request,env,pathname);
   if(pathname==='/api/v1/shares'||pathname.startsWith('/api/v1/shares/')||pathname==='/api/v1/publications'||pathname.startsWith('/api/v1/publications/')||pathname.startsWith('/api/v1/public/shares/'))return await sharesRoute(request,env,pathname);
   if(pathname==='/api/v1/uploads'||pathname.startsWith('/api/v1/uploads/'))return await uploadRoute(request,env,pathname);
+  if(textRoutePattern.test(pathname))return await textEditorRoute(request,env,pathname);
+  if(versionRoutePattern.test(pathname))return await replacementRoute(request,env,pathname);
   if(pathname==='/api/v1/storage/upload'||/^\/api\/v1\/files\/[0-9a-f-]{36}\/(?:content|preview)$/.test(pathname))return await storageRoute(request,env,pathname);
-  if(pathname==='/api/v1/files/recent'||/^\/api\/v1\/spaces\/[0-9a-f-]{36}\/folders$/.test(pathname))return await fileBrowserRoute(request,env,pathname);
+  if(pathname==='/api/v1/search/global')return await globalSearchRoute(request,env);
+  if(pathname==='/api/v1/favorites'||pathname.startsWith('/api/v1/favorites/'))return await favoriteRoute(request,env,pathname);
+  if(pathname==='/api/v1/files/recent'||/^\/api\/v1\/spaces\/[0-9a-f-]{36}\/folders$/.test(pathname)||/^\/api\/v1\/folders\/[0-9a-f-]{36}\/path$/.test(pathname))return await fileBrowserRoute(request,env,pathname);
   if(pathname==='/api/v1/search'||pathname==='/api/v1/files/batch'||/^\/api\/v1\/files\/[0-9a-f-]{36}(?:\/(?:copy|move))?$/.test(pathname)||/^\/api\/v1\/folders\/[0-9a-f-]{36}$/.test(pathname)||/^\/api\/v1\/spaces\/[0-9a-f-]{36}\/contents$/.test(pathname)||(pathname==='/api/v1/folders'&&request.method==='POST'))return await fileManagementRoute(request,env,pathname);
   if(pathname==='/api/v1/spaces'||pathname.startsWith('/api/v1/spaces/')||pathname==='/api/v1/folders'||/^\/api\/v1\/folders\/[0-9a-f-]+\/permissions$/.test(pathname))return await spacesRoute(request,env,pathname);
   if(pathname.startsWith('/api/v1/auth/')||pathname==='/api/v1/users'||pathname.startsWith('/api/v1/users/'))return await authRoute(request,env,pathname);

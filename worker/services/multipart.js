@@ -1,8 +1,10 @@
+import {preparePublicVersions,abandonPreparedPublic,synchronizePublicationOnCommit,MAX_PUBLIC_COPY_BYTES} from './public-versions.js';
 import {RESERVE_SQL,settings} from './admin.js';
 import {one,many,execute,dbFromEnv} from './database.js';
 import {destinationAllowed,storageBinding,DEFAULT_QUOTA_BYTES} from './storage.js';
 import {validName,uuid} from './spaces.js';
 import {ok,error} from '../utils/response.js';
+import {targetForReplace,commitReplacement} from './replacements.js';
 
 export const MiB=1024*1024;
 export const MIN_PART=5*MiB;
@@ -13,7 +15,7 @@ export const MAX_PARTS=10000;
 const STATUS={uploading:'uploading',completed:'completed',aborted:'aborted'};
 export function choosePartSize(bytes){return Math.max(DEFAULT_PART,Math.ceil(bytes/MAX_PARTS/MiB)*MiB);}
 export function validPartLayout(total,part){return Number.isSafeInteger(total)&&total>0&&total<=MAX_TOTAL&&Number.isSafeInteger(part)&&part>=MIN_PART&&part<=MAX_PART&&Math.ceil(total/part)<=MAX_PARTS;}
-function sessionPublic(s,parts=[]){return {id:s.id,file_name:s.file_name,space_id:s.space_id,target_folder_id:s.target_folder_id,total_bytes:s.total_bytes,part_size:s.part_size,status:s.status,expires_at:s.expires_at,recovery_error:s.recovery_error||null,recovery_attempts:s.recovery_attempts||0,parts:parts.map(p=>({part_number:p.part_number,size_bytes:p.size_bytes}))};}
+function sessionPublic(s,parts=[]){return {id:s.id,file_name:s.file_name,space_id:s.space_id,target_folder_id:s.target_folder_id,total_bytes:s.total_bytes,part_size:s.part_size,status:s.status,expires_at:s.expires_at,recovery_error:s.recovery_error||null,recovery_attempts:s.recovery_attempts||0,replace_file_id:s.replace_file_id||null,expected_revision:s.expected_revision??null,parts:parts.map(p=>({part_number:p.part_number,size_bytes:p.size_bytes}))};}
 async function session(db,id,user){return one(db,'SELECT * FROM upload_sessions WHERE id=? AND user_id=?',[id,user.id]);}
 async function getParts(db,id){return many(db,'SELECT part_number,etag,size_bytes FROM upload_parts WHERE upload_session_id=? ORDER BY part_number',[id]);}
 function active(s){return s.status===STATUS.uploading&&Date.parse(s.expires_at.replace(' ','T')+'Z')>Date.now();}
@@ -51,13 +53,41 @@ async function queueOrphan(env,db,s,reason){
   db.prepare("UPDATE upload_sessions SET status='aborted',recovery_error=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND status!='completed'").bind(reason.slice(0,300),s.id)
  ]);
 }
-async function finalizeCompletedObject(db,s,obj,userId){
+async function finalizeCompletedObject(env,db,s,obj,userId){
  if(obj.size!==s.total_bytes)throw new Error('Completed R2 object size mismatch');
  // The logical destination and account permissions must still be valid.
  const uploader=await one(db,'SELECT id,role,status FROM users WHERE id=?',[userId]);
  if(!uploader||uploader.status!=='active'||!await destinationAllowed(db,uploader,s.space_id,s.target_folder_id))throw new Error('UPLOAD_PERMISSION_REVOKED');
  const collision=await one(db,"SELECT id FROM files WHERE space_id=? AND folder_id IS ? AND name=? COLLATE NOCASE AND deleted_at IS NULL AND status!='deleted'",[s.space_id,s.target_folder_id,s.file_name]);
- if(collision)throw new Error('UPLOAD_NAME_CONFLICT');
+ if(collision&&collision.id!==s.replace_file_id)throw new Error('UPLOAD_NAME_CONFLICT');
+ if(s.replace_file_id){
+  const lookup=await targetForReplace(db,uploader,s.replace_file_id,{spaceId:s.space_id,folderId:s.target_folder_id,name:s.file_name,revision:s.expected_revision});
+  if(lookup.error)throw new Error(lookup.error);
+  const objectId=uuid();
+  const prepared=await preparePublicVersions(env,db,{file:lookup.file,newPrivateKey:s.object_key,size:s.total_bytes,mime:s.mime_type,revision:lookup.file.revision+1});
+  let committed=false;
+  try{
+   const changed=await commitReplacement(db,{file:lookup.file,newObjectId:objectId,key:s.object_key,etag:obj.etag||null,size:s.total_bytes,mime:s.mime_type,userId,reservedBytes:s.reserved_bytes,preparedPublic:prepared});
+   if(changed.conflict)throw new Error('VERSION_CONFLICT');
+   committed=true;
+   await execute(db,"UPDATE upload_sessions SET status='completed',reserved_bytes=0,recovery_error=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=?",[s.id]);
+   try{await synchronizePublicationOnCommit(env,prepared)}catch(e){console.warn('RC13.2 deferred public alias sync',e);}
+   return lookup.file.id;
+  }catch(e){
+   if(!committed){
+    // If D1 committed but its response failed, do not delete published R2 bytes.
+    try{
+     const winner=await one(db,"SELECT f.id FROM files f JOIN storage_objects o ON o.id=f.object_id WHERE f.id=? AND o.object_key=?",[lookup.file.id,s.object_key]);
+     if(winner){
+      try{await synchronizePublicationOnCommit(env,prepared)}catch{}
+      return lookup.file.id;
+     }
+    }catch(queryError){console.error('CRITICAL: unknown multipart commit outcome; retaining staged public bytes',queryError);throw e;}
+    await abandonPreparedPublic(env,db,prepared);
+   }
+   throw e;
+  }
+ }
  const objectId=uuid(),fileId=uuid();
  await db.batch([
   db.prepare("INSERT INTO storage_objects(id,bucket_type,object_key,size_bytes,etag,status) VALUES(?,'private',?,?,?,'ready')").bind(objectId,s.object_key,s.total_bytes,obj.etag||null),
@@ -100,7 +130,7 @@ export async function recoverSession(env,s,{retryComplete=true}={}){
   }
  }
  if(obj){
-  try{const fileId=await finalizeCompletedObject(db,s,obj,s.user_id);return {status:'completed',file_id:fileId};}
+  try{const fileId=await finalizeCompletedObject(env,db,s,obj,s.user_id);return {status:'completed',file_id:fileId};}
   catch(e){
    const reason=String(e?.message||e).slice(0,300);
    await execute(db,"UPDATE upload_sessions SET status='failed',recovery_error=?,recovery_attempts=recovery_attempts+1,updated_at=CURRENT_TIMESTAMP WHERE id=? AND status IN ('verifying','failed')",[reason,s.id]);
@@ -120,10 +150,17 @@ export async function recoverSession(env,s,{retryComplete=true}={}){
 }
 export async function initiate(req,env,user){
  const data=await req.json().catch(()=>null),db=dbFromEnv(env),bucket=storageBinding(env);
- const {name,space_id:spaceId,folder_id:folderId=null,size_bytes:size,mime_type:mime='application/octet-stream'}=data||{};
+ const {name,space_id:spaceId,folder_id:folderId=null,size_bytes:size,mime_type:mime='application/octet-stream',replace_file_id:replaceId=null,expected_revision:expectedRevision=null}=data||{};
  if(!validName(name)||!Number.isSafeInteger(size)||!validPartLayout(size,choosePartSize(size))||typeof spaceId!=='string'||!/^[0-9a-f-]{36}$/.test(spaceId)||folderId!==null&&!/^[0-9a-f-]{36}$/.test(folderId)||typeof mime!=='string'||mime.length>120)return error('INVALID_UPLOAD','文件名称、大小或目标无效',400);
  if(!await destinationAllowed(db,user,spaceId,folderId))return error('FORBIDDEN','没有目标目录写入权限',403);
- if(await one(db,"SELECT id FROM files WHERE space_id=? AND folder_id IS ? AND name=? COLLATE NOCASE AND deleted_at IS NULL AND status!='deleted'",[spaceId,folderId,name]))return error('NAME_CONFLICT','目标目录有同名文件',409);
+ const collision=await one(db,"SELECT id FROM files WHERE space_id=? AND folder_id IS ? AND name=? COLLATE NOCASE AND deleted_at IS NULL AND status!='deleted'",[spaceId,folderId,name]);
+ if(replaceId){const lookup=await targetForReplace(db,user,replaceId,{spaceId,folderId,name,revision:expectedRevision});if(lookup.error)return error(lookup.error,'替换目标已变更或权限不足',lookup.status);if(collision?.id!==replaceId)return error('NAME_CONFLICT','指定目标与同名文件不匹配',409);
+  if(size>MAX_PUBLIC_COPY_BYTES){
+   const publication=await one(db,"SELECT id FROM publications WHERE source_file_id=? AND status='ready' AND auto_sync=1 LIMIT 1",[replaceId]);
+   if(publication)return error('PUBLIC_COPY_TOO_LARGE','已公开文件的新版本超过单次 R2 复制上限，不能开始自动同步替换',413);
+  }
+ }
+ else if(collision)return error('NAME_CONFLICT','目标目录有同名文件',409);
  if(!(await settings(db)).uploads_enabled)return error('UPLOAD_DISABLED','管理员已暂停上传',403);
  const reservation=await execute(db,RESERVE_SQL,[size,spaceId,size,DEFAULT_QUOTA_BYTES,size,DEFAULT_QUOTA_BYTES]);
  if(!reservation.meta?.changes)return error('QUOTA_EXCEEDED','空间剩余容量不足',413);
@@ -131,7 +168,7 @@ export async function initiate(req,env,user){
  let upload;
  try{
   upload=await bucket.createMultipartUpload(key,{httpMetadata:{contentType:mime}});
-  await execute(db,"INSERT INTO upload_sessions(id,user_id,space_id,target_folder_id,object_key,r2_upload_id,file_name,total_bytes,reserved_bytes,status,expires_at,part_size,mime_type) VALUES(?,?,?,?,?,?,?,?,?,'uploading',datetime('now','+24 hours'),?,?)",[id,user.id,spaceId,folderId,key,upload.uploadId,name,size,size,partSize,mime]);
+  await execute(db,"INSERT INTO upload_sessions(id,user_id,space_id,target_folder_id,object_key,r2_upload_id,file_name,total_bytes,reserved_bytes,status,expires_at,part_size,mime_type,replace_file_id,expected_revision) VALUES(?,?,?,?,?,?,?,?,?,'uploading',datetime('now','+24 hours'),?,?,?,?)",[id,user.id,spaceId,folderId,key,upload.uploadId,name,size,size,partSize,mime,replaceId,expectedRevision]);
   return ok({upload_id:id,part_size:partSize,total_parts:Math.ceil(size/partSize),expires_in_seconds:86400},201);
  }catch(e){console.error('initiate multipart',e);if(upload)await upload.abort().catch(()=>{});await execute(db,'UPDATE spaces SET reserved_bytes=MAX(0,reserved_bytes-?) WHERE id=?',[size,spaceId]);return error('UPLOAD_FAILED','无法创建上传会话',503)}
 }
@@ -160,12 +197,13 @@ export async function complete(env,user,id){
  if(!await destinationAllowed(db,user,s.space_id,s.target_folder_id))return error('FORBIDDEN','上传权限已撤销',403);
  const parts=await getParts(db,id),completeList=completeParts(s,parts);
  if(!completeList)return error('INCOMPLETE','仍有未完成分片',409);
- if(await one(db,"SELECT id FROM files WHERE space_id=? AND folder_id IS ? AND name=? COLLATE NOCASE AND deleted_at IS NULL AND status!='deleted'",[s.space_id,s.target_folder_id,s.file_name]))return error('NAME_CONFLICT','存在同名文件，请先处理',409);
+ const collision=await one(db,"SELECT id FROM files WHERE space_id=? AND folder_id IS ? AND name=? COLLATE NOCASE AND deleted_at IS NULL AND status!='deleted'",[s.space_id,s.target_folder_id,s.file_name]);
+ if(collision&&collision.id!==s.replace_file_id)return error('NAME_CONFLICT','存在同名文件，请先处理',409);
  const claimed=await execute(db,"UPDATE upload_sessions SET status='verifying',updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='uploading'",[id]);
  if(!claimed.meta?.changes)return error('BUSY','合并已经开始，请查询状态',409);
  try{
   const object=await bucket.resumeMultipartUpload(s.object_key,s.r2_upload_id).complete(completeList);
-  const fileId=await finalizeCompletedObject(db,s,object,user.id);
+  const fileId=await finalizeCompletedObject(env,db,s,object,user.id);
   return ok({file_id:fileId,status:'completed'},201);
  }catch(e){
   console.error('Multipart completion needs recovery',id,e?.message||e);

@@ -1,3 +1,4 @@
+import {openPublicationManager} from './publication-manager.js';
 import {requestJSON} from '../api.js';
 
 const el=(tag,cls='',text='')=>{const n=document.createElement(tag);n.className=cls;n.textContent=text;return n;};
@@ -44,7 +45,7 @@ function expiryControls(defaultValue='7d'){
  return {wrap,select,custom,value:()=>expiryDate(select.value,custom.value)};
 }
 function downloadLimit(value=null){
- const wrap=el('div','mb-3');wrap.append(el('label','form-label','最多下载次数（0 为不限）'));
+ const wrap=el('div','mb-3');wrap.append(el('label','form-label','最多下载次数（0 为不限）'),el('div','form-text mb-1','预览在额度耗尽前不计次；额度耗尽后预览和下载均停止。已传输内容仍可能被保存。'));
  const input=el('input','form-control form-control-sm');input.type='number';input.min='0';input.max='100000';input.step='1';input.value=value??0;
  wrap.append(input);return {wrap,value:()=>{const n=Number(input.value);if(input.value.trim()===''||!Number.isSafeInteger(n)||n<0||n>100000)throw Error('下载次数必须为 0–100000');return n===0?null:n;}};
 }
@@ -78,7 +79,7 @@ export async function openShareDialog(item,{isAdmin=false,onCreated=()=>{},onCha
  divider.append(toggleNew);
  const createPanel=el('section','cd-share-create');createPanel.append(el('h3','h6','新建分享（已有链接不会改变）'));
  const mode=el('select','form-select form-select-sm mb-3');mode.setAttribute('aria-label','选择分享模式');
- for(const [value,label] of [['temporary','临时授权直链（直接下载）'],['page','文件分享页面（密码与预览）'],['public','永久公开直链（R2 / CDN）']]){
+ for(const [value,label] of [['temporary','临时授权直链（直接下载）'],['page','文件分享页面（密码与预览）'],['public','永久智能直链（/r/ 固定地址，自动读取最新版）']]){
   const opt=el('option','',label);opt.value=value;opt.disabled=(kind==='folder'&&value!=='page')||(value==='public'&&!isAdmin);mode.append(opt);
  }
  mode.value=kind==='folder'?'page':'temporary';createPanel.append(mode);
@@ -114,7 +115,7 @@ export async function openShareDialog(item,{isAdmin=false,onCreated=()=>{},onCha
   keyNotice.textContent=keyStatus==='invalid'?'SHARE_LINK_KEY 格式错误。请管理员配置 64 位十六进制密钥；当前无法安全创建可恢复链接。':'未配置 SHARE_LINK_KEY。新建链接将无法再次获取原地址，建议管理员先在 Worker Runtime Secrets 中配置。';
   visible(optOut,keyStatus==='not_configured');
   visible(publicWarning,v==='public');
-  publicWarning.textContent=v==='public'?'永久公开直链不支持密码或有效期。CDN 缓存撤销后仍可能短暂可访问。':'';
+  publicWarning.textContent=v==='public'?'新建永久直链固定为 /r/ 智能地址，更新文件后无需换链接；公开文件不支持密码或有效期，已经缓存的副本无法即时收回。':'';
   create.disabled=v!=='public'&&(keyStatus==='invalid'||(keyStatus==='not_configured'&&!optOutInput.checked));
  }
  mode.onchange=syncCreate;optOutInput.onchange=syncCreate;
@@ -210,15 +211,32 @@ export async function openShareDialog(item,{isAdmin=false,onCreated=()=>{},onCha
     card.append(actions);existingList.append(card);
    }
    if(publications.length){existingList.append(el('h4','h6 mt-3','永久公开直链'));
-    for(const p of publications){const card=el('div','border rounded-3 p-3 mb-2');card.append(el('div','small fw-semibold',`公开 R2 · ${shareStatusLabel(p.status)} · ${p.delivery==='cdn'?'CDN 直连':'Worker 访问'}`));
-     if(p.status==='ready'&&p.url){const holder=el('div','mt-1');displayUrl(holder,p.url,'永久公开直链');card.append(holder);
-      card.append(button('撤销公开',async()=>{if(!window.confirm('撤销公开文件后 CDN 与浏览器缓存仍可能暂时保留。确认撤销？'))return;
+    for(const p of publications){
+     const card=el('div','border rounded-3 p-3 mb-2');
+     card.append(el('div','small fw-semibold',`永久公开 · ${shareStatusLabel(p.status)} · ${p.delivery==='cdn'?'智能 CDN 加速':'Worker 流式访问'} · 发布 V${p.published_revision??'?'}`));
+     if(p.status==='ready'&&p.url){
+      const holder=el('div','mt-1');displayUrl(holder,p.url,'智能永久链接（始终解析最新发布版本）');card.append(holder);
+      if(p.legacy_url&&p.legacy_url!==p.url){const older=el('div','mt-2');displayUrl(older,p.legacy_url,'原始 CDN 地址（兼容旧外链，缓存更新可能延迟）');card.append(older);}
+      if(p.sync_state&&p.sync_state!=='ready'){
+       card.append(el('div','small text-warning mt-2',`原始 CDN 地址同步状态：${p.sync_state}；/r/ 智能链接仍指向最新发布版本。`));
+       card.append(button(p.sync_state==='cache_unverified'?'请求刷新 CDN 缓存':'重试原始 CDN 同步',async()=>{
+        try{const r=await requestJSON(`/api/v1/publications/${p.id}/sync`,{method:'POST'});note(`同步结果：${r.status}`,'text-secondary');await loadExisting();}
+        catch(err){panelMessage(card,err.message,'danger');}
+       },'btn btn-sm btn-outline-primary mt-2'));
+      }
+      card.append(button('版本与同步',()=>{
+       // Avoid stacking two Bootstrap modals: finish closing the share manager first.
+       root.addEventListener('hidden.bs.modal',()=>{void openPublicationManager(p,{onChanged}).catch(e=>console.warn('公开版本管理不可用',e));},{once:true});
+       modal.hide();
+      },'btn btn-sm btn-outline-primary mt-2'));
+      card.append(button('撤销公开',async()=>{if(!window.confirm('撤销后 /r/ 和 /p/ 立即拒绝新请求；CDN 与浏览器缓存的公开副本可能暂时保留。确定撤销？'))return;
        try{const result=await requestJSON(`/api/v1/publications/${p.id}`,{method:'DELETE'});note(result.warning||'公开发布已撤销','text-warning');await loadExisting();onChanged();}
        catch(err){panelMessage(card,err.message,'danger');}
       },'btn btn-sm btn-outline-danger mt-2'));
-     }existingList.append(card);
+     }
+     existingList.append(card);
     }
-    if(pubMeta)existingList.append(el('p','small text-secondary',pubMeta.cdn_configured?`CDN：${pubMeta.cdn_base_url}`:'公开直链当前通过 Worker /p/ 提供（尚未设置 R2 自定义 CDN 域名）'));
+    if(pubMeta)existingList.append(el('p','small text-secondary',pubMeta.cdn_configured?`CDN：${pubMeta.cdn_base_url}`:'未配置公开 CDN 时，/r/ 由 Worker 直接提供最新文件。'));
    }
    syncCreate();
    if(autoLoad)await autoLoad();

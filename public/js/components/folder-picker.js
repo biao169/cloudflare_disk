@@ -16,7 +16,7 @@ export function pickFolder({spaceId,spaceName='当前空间',title='选择目标
   const state=el('div','small text-secondary mt-2');const more=el('button','btn btn-sm btn-outline-secondary mt-2','加载更多文件夹');more.type='button';more.hidden=true;
   body.append(hint,crumb,list,state,more);
   const footer=el('div','modal-footer');const cancel=el('button','btn btn-outline-secondary','取消');cancel.type='button';cancel.dataset.bsDismiss='modal';
-  const choose=el('button','btn btn-primary','选择此目录');choose.type='button';footer.append(cancel,choose);
+  const choose=el('button','btn btn-primary','选择此目录');choose.type='button';choose.disabled=true;footer.append(cancel,choose);
   content.append(header,body,footer);dialog.append(content);shell.append(dialog);document.body.append(shell);
   const bs=new bootstrap.Modal(shell,{backdrop:'static'});let resolved=false,current=null,parents=[],offset=0,writable=false,fetchSeq=0;
   const finish=value=>{if(!resolved){resolved=true;resolve(value);}bs.hide();};

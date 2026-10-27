@@ -43,14 +43,14 @@ const etagOf=b=>`test-etag-${b.length}`;
 export class MemoryR2 {
  constructor(){this.objects=new Map();this.multipart=new Map();this.failDelete=false;}
  async put(key,body,opts={}){
-  const bytes=await bytesFrom(body);this.objects.set(key,{bytes,mime:opts?.httpMetadata?.contentType||'application/octet-stream'});
+  const bytes=await bytesFrom(body);this.objects.set(key,{bytes,mime:opts?.httpMetadata?.contentType||'application/octet-stream',cacheControl:opts?.httpMetadata?.cacheControl||null});
   return {key,size:bytes.length,etag:etagOf(bytes),httpEtag:`"${etagOf(bytes)}"`};
  }
  async get(key,opts={}){
   const item=this.objects.get(key);if(!item)return null;
   const r=opts?.range;
   const bytes=r?item.bytes.slice(r.offset,r.offset+r.length):item.bytes;
-  return {key,size:item.bytes.length,etag:etagOf(item.bytes),httpEtag:`"${etagOf(item.bytes)}"`,body:new Blob([bytes]).stream(),httpMetadata:{contentType:item.mime}};
+  return {key,size:item.bytes.length,etag:etagOf(item.bytes),httpEtag:`"${etagOf(item.bytes)}"`,body:new Blob([bytes]).stream(),httpMetadata:{contentType:item.mime,cacheControl:item.cacheControl}};
  }
  async head(key){const i=this.objects.get(key);return i?{key,size:i.bytes.length,etag:etagOf(i.bytes)}:null;}
  async list({limit=1000,cursor}={}){

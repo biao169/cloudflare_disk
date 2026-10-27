@@ -49,7 +49,7 @@ test('RC7: mixed batch move and trash preserve ACL and folder nesting',async t=>
  const env=makeTestEnv();t.after(()=>env.DB.close());const adm=await initialize(env);
  const dest=await folder(env,adm.cookie,adm.spaceId,'destination');const sub=await folder(env,adm.cookie,adm.spaceId,'source');
  const a=await upload(env,adm.cookie,adm.spaceId,'a.bin','abc');const b=await upload(env,adm.cookie,adm.spaceId,'b.bin','def');
- const moved=await api(env,'/api/v1/files/batch',{method:'POST',cookie:adm.cookie,body:{operation:'move',file_ids:[a.id,b.id],folder_ids:[sub],target_folder_id:dest}});
+ const moved=await api(env,'/api/v1/files/batch',{method:'POST',cookie:adm.cookie,body:{operation:'move',file_ids:[a.id,b.id],folder_ids:[sub],target_folder_id:dest,confirm_acl_change:true}});
  assert.equal(moved.status,200,JSON.stringify(moved.data));assert.equal(moved.data.data.results.length,3);assert.equal(moved.data.data.partial_failure,false);
  assert.equal(env.DB.query('SELECT parent_id FROM folders WHERE id=?',sub).parent_id,dest);
  assert.equal(env.DB.query('SELECT folder_id FROM files WHERE id=?',a.id).folder_id,dest);

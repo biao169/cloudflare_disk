@@ -102,6 +102,20 @@ export async function adminRoute(req,env,path){
   return ok({uploads:result.results?.uploads||{attempted:0,cleaned:0,pending:0},storage:result.results?.storage||{attempted:0,cleaned:0},run_id:result.run_id,
    note:'只处理过期或停滞上传，并重试持久化清理任务；使用 RC9 同一维护任务锁。'});
  }
+ if(path==='/api/v1/admin/version-operations'&&method==='GET'){
+  const [sync,history,cleanup,usage]=await Promise.all([
+   many(db,`SELECT status,COUNT(*) AS count,COALESCE(SUM(reserved_alias_bytes),0) AS reserved_bytes
+      FROM publication_sync_jobs GROUP BY status`),
+   one(db,`SELECT COUNT(*) AS count,COALESCE(SUM(v.size_bytes),0) AS logical_bytes
+      FROM file_versions v WHERE EXISTS(SELECT 1 FROM storage_objects o WHERE o.id=v.object_id AND o.status='ready')`),
+   one(db,`SELECT COUNT(*) AS count,COALESCE(SUM(size_bytes),0) AS bytes FROM storage_cleanup_jobs`),
+   one(db,`SELECT COALESCE(SUM(used_bytes),0) AS used_bytes,COALESCE(SUM(reserved_bytes),0) AS reserved_bytes FROM spaces`)
+  ]);
+  return ok({sync_jobs:sync,private_history:history,cleanup_pending:cleanup,quota_ledger:usage,
+   warnings:['统计来自 D1，历史对象可能被多个版本共同引用，不能简单相加。',
+    'CDN_PURGE_NOT_CONFIGURED 时旧直链可能返回缓存；不要将 cache_unverified 视作全球一致。'],
+   destructive_changes:false});
+ }
  if(path==='/api/v1/admin/reconcile'&&method==='GET')return ok(await reconcileLedger(db));
  if(path==='/api/v1/admin/reconcile/objects'&&method==='GET'){
   const url=new URL(req.url);const type=url.searchParams.get('bucket');

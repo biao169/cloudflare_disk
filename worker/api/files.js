@@ -1,6 +1,7 @@
 import {one,many,execute,dbFromEnv} from '../services/database.js';
 import {resolveUser,jsonBody} from '../services/auth.js';
 import {spaceAccess,folderAccess,canFolder,canSpace,validName,uuid} from '../services/spaces.js';
+import {folderAccessBatch} from '../services/permission-batch.js';
 import {ok,error} from '../utils/response.js';
 const idOK=v=>typeof v==='string'&&/^[0-9a-f-]{36}$/.test(v);
 const deny=()=>error('UNAUTHORIZED','请先登录',401);
@@ -34,18 +35,21 @@ export async function fileManagementRoute(req,env,path){
   const fileOrder={name_asc:'name COLLATE NOCASE ASC,id ASC',name_desc:'name COLLATE NOCASE DESC,id DESC',updated_desc:'updated_at DESC,id DESC',size_desc:'size_bytes DESC,id DESC'}[sort];
   let folders=[];
   if(filter==='all')folders=await many(db,`SELECT id,name,parent_id,created_at,updated_at FROM folders WHERE space_id=? AND parent_id IS ? AND deleted_at IS NULL ORDER BY ${folderOrder} LIMIT ? OFFSET ?`,[spaceId,parent,limit+1,offset]);
-  const accessible=[];for(const f of folders.slice(0,limit)){const a=await folderAccess(db,user,f.id);if(canFolder(a,'read'))accessible.push(f)}
+  const accessible=[],folderRights=await folderAccessBatch(db,user,folders.slice(0,limit).map(f=>f.id));
+  for(const f of folders.slice(0,limit)){if(canFolder(folderRights.get(f.id),'read'))accessible.push(f)}
   const typeClause={all:'',images:" AND mime_type LIKE 'image/%'",videos:" AND mime_type LIKE 'video/%'",documents:" AND (mime_type='application/pdf' OR mime_type LIKE 'text/%' OR mime_type LIKE '%document%' OR mime_type LIKE '%spreadsheet%')",other:" AND mime_type NOT LIKE 'image/%' AND mime_type NOT LIKE 'video/%' AND mime_type!='application/pdf' AND mime_type NOT LIKE 'text/%' AND mime_type NOT LIKE '%document%' AND mime_type NOT LIKE '%spreadsheet%'"}[filter];
   const files=await many(db,`SELECT id,name,space_id,folder_id,size_bytes,mime_type,status,created_at,updated_at FROM files WHERE space_id=? AND folder_id IS ? AND deleted_at IS NULL AND status='ready' ${typeClause} ORDER BY ${fileOrder} LIMIT ? OFFSET ?`,[spaceId,parent,limit+1,offset]);
   return ok({folders:accessible,files:files.slice(0,limit),parent_id:parent,limit,offset,has_more:folders.length>limit||files.length>limit});
  }
  if(path==='/api/v1/search'&&method==='GET'){
-  const sid=q.get('space_id'),term=(q.get('q')||'').trim();if(!idOK(sid)||term.length<1||term.length>100)return error('INVALID_INPUT','搜索参数无效',400);
+  const sid=q.get('space_id'),term=(q.get('q')||'').trim();if(!idOK(sid)||term.length<1||new TextEncoder().encode(term).length>46)return error('INVALID_INPUT','搜索关键词需在 46 字节以内，以符合 D1 LIKE 限制',400);
   if(!await spaceAccess(db,user,sid))return invisible();const pattern='%'+term.replaceAll('\\','\\\\').replaceAll('%','\\%').replaceAll('_','\\_')+'%';
+  if(new TextEncoder().encode(pattern).length>50)return error('INVALID_INPUT','搜索关键词包含过多特殊字符',400);
   const fs=await many(db,"SELECT id,name,folder_id,size_bytes,mime_type,updated_at FROM files WHERE space_id=? AND status='ready' AND deleted_at IS NULL AND name LIKE ? ESCAPE '\\' ORDER BY updated_at DESC LIMIT 100",[sid,pattern]);
   const folders=await many(db,"SELECT id,name,parent_id FROM folders WHERE space_id=? AND deleted_at IS NULL AND name LIKE ? ESCAPE '\\' ORDER BY name LIMIT 100",[sid,pattern]);
-  const checkedFiles=[];for(const f of fs){if(await parentRight(db,user,sid,f.folder_id,'read'))checkedFiles.push(f)}
-  const checkedFolders=[];for(const f of folders){if(await folderTarget(db,user,f,'read'))checkedFolders.push(f)}
+  const lookup=await folderAccessBatch(db,user,[...fs.map(f=>f.folder_id),...folders.map(f=>f.id)]);
+  const checkedFiles=[];for(const f of fs){if(!f.folder_id||canFolder(lookup.get(f.folder_id),'read'))checkedFiles.push(f)}
+  const checkedFolders=[];for(const f of folders){if(canFolder(lookup.get(f.id),'read'))checkedFolders.push(f)}
   return ok({files:checkedFiles,folders:checkedFolders});
  }
  if(path==='/api/v1/folders'&&method==='POST'){
@@ -61,6 +65,15 @@ export async function fileManagementRoute(req,env,path){
   const name=b?.name===undefined?f.name:b.name;const target=b?.parent_id===undefined?f.parent_id:(b.parent_id||null);
   if(!validName(name)||target&&!idOK(target))return error('INVALID_INPUT','参数无效',400);
   if(!await targetValid(db,user,f.space_id,target))return forbidden();
+  const parentChanged=target!==f.parent_id;
+  if(parentChanged){
+   // Moving a directory changes inherited ACLs for the entire subtree.
+   // Editors may rename directories but cannot silently expand access for
+   // other members by moving a parent beneath a less restrictive folder.
+   const role=await spaceAccess(db,user,f.space_id);
+   if(role?.role!=='admin'||!await parentRight(db,user,f.space_id,f.parent_id,'delete'))return forbidden();
+   if(b?.confirm_acl_change!==true)return error('ACL_CHANGE_CONFIRMATION_REQUIRED','移动文件夹将改变其子目录继承权限，请由空间管理员确认',409);
+  }
   let cur=target;const visited=new Set();while(cur){if(cur===f.id)return error('DIRECTORY_CYCLE','不能把目录移入自身或子目录',409);if(visited.has(cur))return error('DIRECTORY_CYCLE','目录结构异常',409);visited.add(cur);const p=await one(db,'SELECT parent_id,space_id FROM folders WHERE id=? AND deleted_at IS NULL',[cur]);if(!p||p.space_id!==f.space_id)return invisible();cur=p.parent_id}
   if(await existsName(db,f.space_id,target,name.trim(),f.id))return error('NAME_CONFLICT','目标目录已有同名文件夹',409);
   await execute(db,'UPDATE folders SET name=?,parent_id=?,updated_at=CURRENT_TIMESTAMP WHERE id=?',[name.trim(),target,f.id]);return ok({id:f.id,name:name.trim(),parent_id:target});
@@ -73,6 +86,10 @@ export async function fileManagementRoute(req,env,path){
   if((!op&&method==='PATCH')||(op&&method==='POST')){
    const name=b?.name===undefined?f.name:b.name;const target=b?.target_folder_id===undefined?f.folder_id:(b.target_folder_id||null);
    if(!validName(name)||target&&!idOK(target))return error('INVALID_INPUT','参数无效',400);
+   // A copy requires actual read rights. Moving between parents requires
+   // delete rights at the old location, not only write rights at the target.
+   if(op==='copy'&&!await fileRight(db,user,f,'read'))return forbidden();
+   if(target!==f.folder_id&&!await fileRight(db,user,f,'delete'))return forbidden();
    if(!await targetValid(db,user,f.space_id,target))return forbidden();
    if(await existsName(db,f.space_id,target,name.trim(),op==='copy'?null:f.id,'file'))return error('NAME_CONFLICT','同名文件已存在',409);
    if(op==='copy'){
@@ -90,7 +107,7 @@ export async function fileManagementRoute(req,env,path){
   const results=[];
   for(const [kind,ids] of [['file',files],['folder',folders]])for(const id of ids){
    const where=kind==='file'?`/api/v1/files/${id}/${b.operation}`:`/api/v1/folders/${id}`;
-   const fake=new Request(req.url,{method:kind==='file'?'POST':'PATCH',headers:{'content-type':'application/json',cookie:req.headers.get('cookie')||'',origin:new URL(req.url).origin},body:JSON.stringify(kind==='file'?{target_folder_id:b.target_folder_id}: {parent_id:b.target_folder_id})});
+   const fake=new Request(req.url,{method:kind==='file'?'POST':'PATCH',headers:{'content-type':'application/json',cookie:req.headers.get('cookie')||'',origin:new URL(req.url).origin},body:JSON.stringify(kind==='file'?{target_folder_id:b.target_folder_id}: {parent_id:b.target_folder_id,confirm_acl_change:b.confirm_acl_change===true})});
    const res=await fileManagementRoute(fake,env,where);
    const parsed=await res.json();results.push({id,kind,status:res.status,success:res.ok,error:res.ok?null:parsed.error?.code});
   }

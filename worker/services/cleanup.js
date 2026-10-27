@@ -7,6 +7,17 @@ export async function finishStorageCleanup(env,job){
  // Never remove an object that has acquired a new logical reference.
  const stillUsed=await one(db,'SELECT f.id FROM files f JOIN storage_objects o ON o.id=f.object_id WHERE o.id=? OR o.object_key=? LIMIT 1',[job.object_id,job.object_key]);
  if(stillUsed)throw new Error('Cleanup object still referenced by a file');
+ const oldVersion=await one(db,'SELECT id FROM file_versions WHERE object_id=? LIMIT 1',[job.object_id]);
+ if(oldVersion)throw new Error('Cleanup object still referenced by a file history revision');
+ // Published immutable versions and aliases may be referenced by metadata
+ // even after revocation; never delete an object used by an ACTIVE publication.
+ if(job.bucket_type==='public'){
+  const active=await one(db,`SELECT p.id FROM publications p
+   WHERE p.status='ready' AND (p.public_object_id=? OR p.legacy_object_id=? OR EXISTS(
+    SELECT 1 FROM publication_versions v WHERE v.publication_id=p.id AND v.object_id=?)) LIMIT 1`,
+   [job.object_id,job.object_id,job.object_id]);
+  if(active)throw new Error('Cleanup public object still referenced by an active publication');
+ }
  const bucket=job.bucket_type==='private'?env.PRIVATE_BUCKET:env.PUBLIC_BUCKET;
  if(!bucket?.delete)throw new Error('Cleanup R2 binding missing');
  try{
@@ -14,7 +25,10 @@ export async function finishStorageCleanup(env,job){
   // this operation can safely be repeated.
   await bucket.delete(job.object_key);
   await db.batch([
-   db.prepare('DELETE FROM storage_objects WHERE id=? AND NOT EXISTS (SELECT 1 FROM files WHERE object_id=?) AND EXISTS (SELECT 1 FROM storage_cleanup_jobs WHERE id=?)').bind(job.object_id,job.object_id,job.id),
+   // Keep public metadata as a tombstone when revoked publications or historical
+   // version rows still reference it via foreign keys.
+   ...(job.bucket_type==='public'?[db.prepare("UPDATE storage_objects SET status='deleted',updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(job.object_id)]:[
+    db.prepare('DELETE FROM storage_objects WHERE id=? AND NOT EXISTS (SELECT 1 FROM files WHERE object_id=?) AND EXISTS (SELECT 1 FROM storage_cleanup_jobs WHERE id=?)').bind(job.object_id,job.object_id,job.id)]),
    db.prepare('UPDATE spaces SET used_bytes=MAX(0,used_bytes-?),reserved_bytes=MAX(0,reserved_bytes-?) WHERE id=? AND EXISTS (SELECT 1 FROM storage_cleanup_jobs WHERE id=?)').bind(job.size_bytes,job.reserved_release_bytes||0,job.space_id,job.id),
    db.prepare("UPDATE upload_sessions SET reserved_bytes=0 WHERE id=? AND status='aborted' AND EXISTS (SELECT 1 FROM storage_cleanup_jobs WHERE id=?)").bind(job.upload_session_id||'',job.id),
    db.prepare('DELETE FROM storage_cleanup_jobs WHERE id=?').bind(job.id)

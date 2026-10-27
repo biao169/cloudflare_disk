@@ -1,5 +1,6 @@
 import {one,many,execute,dbFromEnv} from './database.js';
 import {spaceAccess,folderAccess,canFolder,canSpace,uuid,permissions} from './spaces.js';
+import {folderAccessBatch} from './permission-batch.js';
 import {ok,error} from '../utils/response.js';
 import {settings} from './admin.js';
 import {finishStorageCleanup} from './cleanup.js';
@@ -21,6 +22,8 @@ async function activeFileTree(db,id){return many(db,`WITH RECURSIVE subtree(id,d
 ) SELECT f.id,f.object_id,f.space_id,f.folder_id FROM files f JOIN subtree s ON f.folder_id=s.id
  WHERE f.deleted_at IS NULL AND f.status='ready' LIMIT 202`,[id]);}
 const placeholders=n=>Array(n).fill('?').join(',');
+export const SAFE_SQL_CHUNK=70;
+export const sqlChunks=items=>{const r=[];for(let i=0;i<items.length;i+=SAFE_SQL_CHUNK)r.push(items.slice(i,i+SAFE_SQL_CHUNK));return r;};
 // One ACL query for the whole active subtree. This avoids a D1 read for every
 // descendant, which can exceed the free-tier request query budget.
 async function subtreeDeleteAllowed(db,user,spaceId,folders){
@@ -29,10 +32,10 @@ async function subtreeDeleteAllowed(db,user,spaceId,folders){
  if(!folders.length)return false;
  const root=await folderAccess(db,user,folders[0].id);
  if(!canFolder(root,'delete'))return false;
- const ids=folders.map(f=>f.id);
- const grants=await many(db,`SELECT folder_id,principal_type,permission_mask FROM folder_permissions
- WHERE folder_id IN (${placeholders(ids.length)}) AND
- ((principal_type='user' AND principal_id=?) OR (principal_type='role' AND principal_id=?))`,[...ids,user.id,space.role]);
+ const ids=folders.map(f=>f.id),grants=[];
+ for(const group of sqlChunks(ids))grants.push(...await many(db,`SELECT folder_id,principal_type,permission_mask FROM folder_permissions
+ WHERE folder_id IN (${placeholders(group.length)}) AND
+ ((principal_type='user' AND principal_id=?) OR (principal_type='role' AND principal_id=?))`,[...group,user.id,space.role]));
  const byFolder=new Map();for(const row of grants){if(!byFolder.has(row.folder_id))byFolder.set(row.folder_id,[]);byFolder.get(row.folder_id).push(row);}
  const masks=new Map([[folders[0].id,root.mask]]);
  for(const f of folders.slice(1)){
@@ -75,17 +78,17 @@ export async function trashItem(env,user,type,id){const db=dbFromEnv(env);if(!['
  for(const f of files){const pubs=await many(db,"SELECT p.id,p.public_object_id,o.object_key FROM publications p JOIN storage_objects o ON o.id=p.public_object_id WHERE p.source_file_id=? AND p.status='ready'",[f.id]);for(const pub of pubs){try{if(!env.PUBLIC_BUCKET)throw new Error('PUBLIC_BUCKET binding missing');await revokePublication(env,db,pub);}catch(e){console.error('Failed revoking public object',e);return error('PUBLIC_REVOKE_FAILED','公开副本撤销失败，未继续执行删除',503)}}}
  const fileIds=files.map(f=>f.id),folderIds=folders.map(f=>f.id);
  const commands=[db.prepare('INSERT INTO trash_entries(id,target_type,target_id,space_id,original_parent_id,deleted_by,purge_at) VALUES(?,?,?,?,?,?,?)').bind(trashId,type,id,item.space_id,parent,user.id,purgeAt)];
- if(fileIds.length){
-  const ph=placeholders(fileIds.length);
-  commands.push(db.prepare(`INSERT INTO trash_entry_items(trash_id,item_type,item_id) SELECT ?, 'file',id FROM files WHERE id IN (${ph}) AND deleted_at IS NULL`).bind(trashId,...fileIds));
-  commands.push(db.prepare(`UPDATE files SET status='trashed',deleted_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id IN (${ph}) AND deleted_at IS NULL`).bind(...fileIds));
-  commands.push(db.prepare(`UPDATE shares SET revoked_at=CURRENT_TIMESTAMP WHERE target_type='file' AND target_id IN (${ph}) AND revoked_at IS NULL`).bind(...fileIds));
+ for(const ids of sqlChunks(fileIds)){
+  const ph=placeholders(ids.length);
+  commands.push(db.prepare(`INSERT INTO trash_entry_items(trash_id,item_type,item_id) SELECT ?, 'file',id FROM files WHERE id IN (${ph}) AND deleted_at IS NULL`).bind(trashId,...ids));
+  commands.push(db.prepare(`UPDATE files SET status='trashed',deleted_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id IN (${ph}) AND deleted_at IS NULL`).bind(...ids));
+  commands.push(db.prepare(`UPDATE shares SET revoked_at=CURRENT_TIMESTAMP WHERE target_type='file' AND target_id IN (${ph}) AND revoked_at IS NULL`).bind(...ids));
  }
- if(folderIds.length){
-  const ph=placeholders(folderIds.length);
-  commands.push(db.prepare(`INSERT INTO trash_entry_items(trash_id,item_type,item_id) SELECT ?, 'folder',id FROM folders WHERE id IN (${ph}) AND deleted_at IS NULL`).bind(trashId,...folderIds));
-  commands.push(db.prepare(`UPDATE folders SET deleted_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id IN (${ph}) AND deleted_at IS NULL`).bind(...folderIds));
-  commands.push(db.prepare(`UPDATE shares SET revoked_at=CURRENT_TIMESTAMP WHERE target_type='folder' AND target_id IN (${ph}) AND revoked_at IS NULL`).bind(...folderIds));
+ for(const ids of sqlChunks(folderIds)){
+  const ph=placeholders(ids.length);
+  commands.push(db.prepare(`INSERT INTO trash_entry_items(trash_id,item_type,item_id) SELECT ?, 'folder',id FROM folders WHERE id IN (${ph}) AND deleted_at IS NULL`).bind(trashId,...ids));
+  commands.push(db.prepare(`UPDATE folders SET deleted_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id IN (${ph}) AND deleted_at IS NULL`).bind(...ids));
+  commands.push(db.prepare(`UPDATE shares SET revoked_at=CURRENT_TIMESTAMP WHERE target_type='folder' AND target_id IN (${ph}) AND revoked_at IS NULL`).bind(...ids));
  }
  await db.batch(commands);
  return ok({trash_id:trashId,type,id,purge_at:purgeAt});
@@ -94,7 +97,8 @@ export async function listTrash(env,user,spaceId){const db=dbFromEnv(env);if(!sa
  const entries=await many(db,`SELECT t.id,t.target_type,t.target_id,t.space_id,t.deleted_at,t.purge_at,t.original_parent_id,t.deleted_by,
  CASE WHEN t.target_type='file' THEN (SELECT name FROM files WHERE id=t.target_id) ELSE (SELECT name FROM folders WHERE id=t.target_id) END AS name
  FROM trash_entries t WHERE t.space_id=? ORDER BY t.deleted_at DESC LIMIT 30`,[spaceId]);
- const allowed=[];for(const t of entries)if(await canSeeTrash(db,user,t))allowed.push(t);
+ const scope=await spaceAccess(db,user,spaceId),folderRights=scope?.role==='admin'?new Map():await folderAccessBatch(db,user,entries.filter(t=>t.deleted_by===user.id&&t.original_parent_id).map(t=>t.original_parent_id));
+ const allowed=entries.filter(t=>scope&&(scope.role==='admin'||(t.deleted_by===user.id&&(t.original_parent_id?canFolder(folderRights.get(t.original_parent_id),'write'):canSpace(scope,'write')))));
  return ok({entries:allowed});}
 async function entryFor(db,user,id){const t=await one(db,'SELECT * FROM trash_entries WHERE id=?',[id]);return t&&await canSeeTrash(db,user,t)?t:null;}
 export async function restoreItem(env,user,id,targetId){const db=dbFromEnv(env),t=await entryFor(db,user,id);if(!t)return invalid();const table=t.target_type==='file'?'files':'folders';const item=await one(db,`SELECT * FROM ${table} WHERE id=?`,[t.target_id]);if(!item)return invalid();
@@ -110,21 +114,16 @@ export async function restoreItem(env,user,id,targetId){const db=dbFromEnv(env),
  if(t.target_type==='file')batch.push(db.prepare("UPDATE files SET folder_id=?,status='ready',deleted_at=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='trashed'").bind(parent,item.id));
  else{
   batch.push(db.prepare('UPDATE folders SET parent_id=? WHERE id=?').bind(parent,item.id));
-  if(folderIds.length)batch.push(db.prepare(`UPDATE folders SET deleted_at=NULL,updated_at=CURRENT_TIMESTAMP WHERE id IN (${placeholders(folderIds.length)})`).bind(...folderIds));
-  if(fileIds.length)batch.push(db.prepare(`UPDATE files SET status='ready',deleted_at=NULL,updated_at=CURRENT_TIMESTAMP WHERE id IN (${placeholders(fileIds.length)}) AND status='trashed'`).bind(...fileIds));
+  for(const ids of sqlChunks(folderIds))batch.push(db.prepare(`UPDATE folders SET deleted_at=NULL,updated_at=CURRENT_TIMESTAMP WHERE id IN (${placeholders(ids.length)})`).bind(...ids));
+  for(const ids of sqlChunks(fileIds))batch.push(db.prepare(`UPDATE files SET status='ready',deleted_at=NULL,updated_at=CURRENT_TIMESTAMP WHERE id IN (${placeholders(ids.length)}) AND status='trashed'`).bind(...ids));
  }
  batch.push(db.prepare('DELETE FROM trash_entries WHERE id=?').bind(id));
  await db.batch(batch);
  return ok({restored:true,target_id:t.target_id,parent_id:parent});}
 async function purgeFile(env,db,file){
  // Revoke all copies and share grants before removing this logical reference.
- const pubs=await many(db,"SELECT p.id,p.public_object_id,o.object_key FROM publications p JOIN storage_objects o ON o.id=p.public_object_id WHERE p.source_file_id=? AND p.status='ready'",[file.id]);
- for(const p of pubs){
-  if(!env.PUBLIC_BUCKET?.delete)throw new Error('PUBLIC_BUCKET missing');
-  await env.PUBLIC_BUCKET.delete(p.object_key);
-  await execute(db,"UPDATE publications SET status='revoked' WHERE id=?",[p.id]);
-  await execute(db,"UPDATE storage_objects SET status='deleted' WHERE id=?",[p.public_object_id]);
- }
+ const pubs=await many(db,"SELECT p.id FROM publications p WHERE p.source_file_id=? AND p.status='ready'",[file.id]);
+ for(const p of pubs)await revokePublication(env,db,p);
  await execute(db,"DELETE FROM shares WHERE target_type='file' AND target_id=?",[file.id]);
  await execute(db,'DELETE FROM publications WHERE source_file_id=?',[file.id]);
  const other=await one(db,'SELECT id FROM files WHERE object_id=? AND id!=? LIMIT 1',[file.object_id,file.id]);

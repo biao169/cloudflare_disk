@@ -3,6 +3,9 @@ import {target,validExpiry,shareIsActive,shareSummary} from './sharing.js';
 import {randomToken,sha256,passwordHash} from './auth.js';
 import {encryptShareCode,decryptShareCode,linkKeyStatus,sharePath} from './share-links.js';
 import {ok,error} from '../utils/response.js';
+import {many} from './database.js';
+import {canFolder,canSpace} from './spaces.js';
+import {folderAccessBatch,spaceAccessBatch} from './permission-batch.js';
 
 const uuidRE=/^[0-9a-f-]{36}$/i;
 const owns=(share,user)=>share&&share.created_by===user.id;
@@ -24,6 +27,55 @@ export async function stateForShare(db,share){
  return 'active';
 }
 export async function summarized(db,share){return shareSummary({...share,status:await stateForShare(db,share)});}
+
+// RC11: summarize owned shares in bounded batches. The old per-row implementation
+// issued multiple D1 queries per share, easily exceeding Workers Free limits.
+export async function summarizedOwnedBatch(db,shares,user){
+ if(!shares.length)return [];
+ const unique=ids=>[...new Set(ids)];
+ const queryTargets=async(table,ids)=>{
+  const result=new Map(),all=unique(ids);
+  for(let i=0;i<all.length;i+=40){const group=all.slice(i,i+40);
+   const columns=table==='files'?'id,space_id,folder_id,deleted_at,status':'id,space_id,parent_id,deleted_at';
+   const rows=await many(db,`SELECT ${columns} FROM ${table} WHERE id IN (${group.map(()=>'?').join(',')})`,group);
+   for(const row of rows)result.set(row.id,row);
+  }
+  return result;
+ };
+ const active=shares.filter(s=>!s.revoked_at&&(!s.expires_at||Date.parse(s.expires_at)>Date.now())&&!(s.max_downloads&&s.download_count>=s.max_downloads));
+ const [files,folders]=await Promise.all([
+  queryTargets('files',active.filter(s=>s.target_type==='file').map(s=>s.target_id)),
+  queryTargets('folders',active.filter(s=>s.target_type==='folder').map(s=>s.target_id))
+ ]);
+ const fileRows=[...files.values()].filter(f=>!f.deleted_at&&f.status==='ready');
+ const [folderRights,spaceRights]=await Promise.all([
+  folderAccessBatch(db,user,[...folders.keys(),...fileRows.map(f=>f.folder_id)]),
+  spaceAccessBatch(db,user,fileRows.filter(f=>!f.folder_id).map(f=>f.space_id))
+ ]);
+ return shares.map(s=>{
+  let status='active';
+  if(s.revoked_at)status='revoked';
+  else if(s.expires_at&&Date.parse(s.expires_at)<=Date.now())status='expired';
+  else if(s.max_downloads&&s.download_count>=s.max_downloads)status='download_limit';
+  else if(!user||user.status!=='active')status='creator_disabled';
+  else if(s.target_type==='folder'){
+   const target=folders.get(s.target_id);
+   if(!target||target.deleted_at)status='target_unavailable';
+   else if(!canFolder(folderRights.get(s.target_id),'share')||!canFolder(folderRights.get(s.target_id),'read'))status='permission_revoked';
+  }else{
+   const target=files.get(s.target_id);
+   if(!target||target.deleted_at||target.status!=='ready')status='target_unavailable';
+   else if(target.folder_id){
+    const a=folderRights.get(target.folder_id);
+    if(!canFolder(a,'share')||!canFolder(a,'read'))status='permission_revoked';
+   }else{
+    const a=spaceRights.get(target.space_id);
+    if(!canSpace(a,'share')||!canSpace(a,'read'))status='permission_revoked';
+   }
+  }
+  return shareSummary({...s,status});
+ });
+}
 export async function recoverOwnedShare(req,env,db,user,share){
  if(!owns(share,user))return error('NOT_FOUND','分享不存在',404);
  const state=await stateForShare(db,share);

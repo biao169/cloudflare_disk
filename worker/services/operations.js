@@ -1,3 +1,6 @@
+import {syncPendingPublications,pruneOldPublicVersions} from './public-versions.js';
+import {pruneFolderSync} from './folder-sync.js';
+import {prunePrivateVersions} from './version-retention.js';
 // Error summaries are intentionally redacted. Never store request bodies, secrets,
 // object keys, stack traces, tokens, URLs or usernames in operational_events.
 import {dbFromEnv,execute,one,many} from './database.js';
@@ -23,9 +26,23 @@ export async function recordIncident(env,{source='worker',code='SERVER_ERROR',le
  }catch(e){console.warn('RC9 incident persistence unavailable',e?.name||'Error');return false;}
 }
 
+// RC11: prune expired authentication state in small, indexed batches. Never
+// remove currently valid sessions or share password authorizations.
+export async function pruneAuthRecords(db,{batchSize=20}={}){
+ const size=Math.max(1,Math.min(40,batchSize));
+ const work=[
+  ['sessions',"DELETE FROM sessions WHERE id IN (SELECT id FROM sessions WHERE expires_at<CURRENT_TIMESTAMP OR (revoked_at IS NOT NULL AND revoked_at<datetime('now','-7 days')) ORDER BY expires_at LIMIT ?)"],
+  ['share_access',"DELETE FROM share_access WHERE id IN (SELECT id FROM share_access WHERE expires_at<CURRENT_TIMESTAMP ORDER BY expires_at LIMIT ?)"],
+  ['auth_attempts',"DELETE FROM auth_attempts WHERE identifier IN (SELECT identifier FROM auth_attempts WHERE updated_at<datetime('now','-2 days') ORDER BY updated_at LIMIT ?)"],
+  ['share_password_attempts',"DELETE FROM share_password_attempts WHERE id IN (SELECT id FROM share_password_attempts WHERE updated_at<datetime('now','-2 days') ORDER BY updated_at LIMIT ?)"],
+ ];
+ const result={};for(const [name,sql] of work){const r=await execute(db,sql,[size]);result[name]=r.meta?.changes||0;}
+ return result;
+}
+
 // A single lease prevents an admin click and a Cron Trigger from both cleaning
 // the same objects. Bounded units keep work within Workers Free CPU/D1 budgets.
-export async function runMaintenance(env,{source='cron',actorId=null,tasks=['uploads','storage','trash']}={}){
+export async function runMaintenance(env,{source='cron',actorId=null,tasks=['uploads','storage','trash','auth','publications','history']}={}){
  const db=dbFromEnv(env);
  const preferences=await settings(db);
  if(source==='cron'&&preferences.maintenance_paused)return {status:'skipped',reason:'MAINTENANCE_PAUSED'};
@@ -39,11 +56,14 @@ export async function runMaintenance(env,{source='cron',actorId=null,tasks=['upl
   for(const [name,fn] of [
    ['uploads',()=>cleanupExpired(env,{limit:2})],
    ['storage',()=>cleanupPendingStorage(env,{limit:2})],
-   ['trash',()=>cleanupTrash(env,{limit:1})]
+   ['trash',()=>cleanupTrash(env,{limit:1})],
+   ['auth',async()=>({...await pruneAuthRecords(db,{batchSize:20}),folder_sync:await pruneFolderSync(db,{limit:10})})],
+   ['publications',async()=>({sync:await syncPendingPublications(env,{limit:1}),prune:await pruneOldPublicVersions(env,{limit:1})})],
+   ['history',()=>prunePrivateVersions(env,{limit:1,keep:1,graceDays:7})]
   ].filter(([name])=>tasks.includes(name))){
    try{summary[name]=await fn();
     const pending=Number(summary[name]?.failed||0) > 0 || (name==='storage'&&Number(summary[name]?.attempted)>Number(summary[name]?.cleaned)) ||
-     (name==='uploads'&&Number(summary[name]?.pending)>0);
+     (name==='uploads'&&Number(summary[name]?.pending)>0) || (name==='publications'&&Number(summary[name]?.sync?.remaining)>0);
     if(pending){failures.push(name);await recordIncident(env,{source:'maintenance.'+name,code:'MAINTENANCE_BATCH_PARTIAL',level:'warning'});}
    }
    catch(e){summary[name]={failed:true};failures.push(name);console.error('RC9 maintenance task failed',name,e);await recordIncident(env,{source:'maintenance.'+name,code:'MAINTENANCE_STEP_FAILED'});}

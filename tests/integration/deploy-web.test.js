@@ -25,7 +25,7 @@ test('published files work without a CDN domain on the Worker host; revocation i
  assert.equal(upload.status,201,JSON.stringify(upload.data));
  const pub=await api(env,'/api/v1/publications',{method:'POST',cookie:user.cookie,body:{file_id:upload.data.data.id}});
  assert.equal(pub.status,201,JSON.stringify(pub.data));
- const u=new URL(pub.data.data.url);assert.equal(u.origin,origin);assert.match(u.pathname,/^\/p\/[0-9a-f-]{36}$/);
+ const u=new URL(pub.data.data.url);assert.equal(u.origin,origin);assert.match(u.pathname,/^\/r\/[0-9a-f-]{36}$/);
  const fetched=await api(env,u.pathname);assert.equal(fetched.status,200);assert.equal(fetched.response.headers.get('cache-control'),'no-store');
  assert.equal(await fetched.response.text(),new TextDecoder().decode(doc));
  const partial=await api(env,u.pathname,{headers:{Range:'bytes=0-3'}});assert.equal(partial.status,206);assert.equal(partial.response.headers.get('content-range'),`bytes 0-3/${doc.length}`);assert.equal(await partial.response.text(),'%PDF');

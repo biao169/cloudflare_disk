@@ -1,4 +1,15 @@
-# CloudDrive V1 RC9 — Cloudflare 网页版自动部署（优先阅读）
+> **RC13.5 运维更新：** 旧 CDN 链接重试退避、历史版本安全保留及清理、版本同步与容量仪表盘。详见 [RC13.5 运维文档](docs/RC13_5_OPERATIONS.md)。生产部署仍使用 `npm run build` / `npm run deploy`。
+
+# CloudDrive V1 RC13.4 — 网页版自动部署与在线编辑
+
+> **RC13.4** 新增小型 UTF-8 文本在线编辑、Bootstrap 历史版本预览/下载/恢复、公开版本列表与同步管理。文件 ID、原有私密分享及 `/r/*` 永久链接保持不变。无需新增 D1 迁移或必需 Secret。详见 [RC13.4 使用与技术说明](docs/RC13_4_ONLINE_EDIT_AND_VERSIONS.md)。
+
+> **RC13.3 已实现文件夹合并、镜像替换和持久化批量任务进度。** 在 `/files` 中点击“📁 合并/镜像更新文件夹”或拖拽本地文件夹，先查看服务器差异清单，再选择合并（保留旧项目）、镜像（上传成功后清理旧项目）或创建新文件夹。匹配文件的 ID、版本历史及私密分享链接继续保留，更新的永久 `/r/*` 按 RC13.2 自动指向新版。**新增迁移 `0021_rc13_3_folder_sync.sql`，不需要新 Secret，Build/Deploy 命令不变。** 详细说明：[RC13.3 文件夹更新与安全恢复](docs/RC13_3_FOLDER_SYNC.md)。
+
+> **RC13.2 新功能：永久智能直链 `/r/{publicationId}`。** 覆盖现有文件时可在公开副本准备成功后自动切换最新版；新分享的 `url` 默认返回智能固定入口，原 `/p/*` 和已发出的 `published/*` CDN 地址继续兼容。详细说明见 [RC13.2 永久版本化与缓存规则](docs/RC13_2_PUBLIC_VERSIONS.md)。Cloudflare 网页端 Build Command 仍为 `npm run build`、Deploy Command 为 `npm run deploy`，无需新增强制 Secret。
+
+
+> RC13.1 更新：同名文件上传可覆盖并保留私密分享链接，支持独立历史修订与恢复。详细说明见 [`docs/RC13_1_REPLACEMENT.md`](docs/RC13_1_REPLACEMENT.md)。永久公开 CDN 同步在 RC13.2 实现。
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/biao169/cloudflare_disk)
 
@@ -8,6 +19,27 @@
 **架构：** 原生 HTML + Bootstrap 5 + JavaScript、Cloudflare Workers Free、D1、R2（公开/私有两个桶）。**无需 Vue、Vite 或前端编译。**
 
 > RC5 已修复“Worker/R2/D1 Binding 均创建成功，但 `/api/v1/health/ready` 始终返回 `D1_MIGRATIONS_REQUIRED`”的问题。原因之一是 Wrangler 的自动资源创建允许省略 `database_id`，而远程 D1 migrations 命令可能要求真实 `database_id`。RC5 在部署过程中自动发现并注入 ID 到一个**临时**配置文件，不修改或提交账号专属 ID。另修复 `0001_initial.sql` 中不适合 D1 迁移事务的 `PRAGMA foreign_keys = ON`。
+
+## RC12：日常文件操作体验（已包含）
+
+RC12 在原有 RC11 安全权限基础上，新增 **跨空间全局搜索、拖拽文件/文件夹上传、常驻目录树、批量操作进度、个人收藏夹**。搜索和收藏始终复用当前登录权限；文件内容仍保存在原 R2，不迁移文件。拖拽文件夹在 Chrome/Edge 支持，最多每批 500 个文件、12 层目录；批量移动/复制/删除增加可见进度与失败明细。顶部菜单新增 `/search` 与 `/favorites`。
+
+- **生产更新**：保持 Cloudflare Build Command `npm run build`、Deploy Command `npm run deploy`，GitHub 生产分支 `main`，`cloudflare-disk` Worker 和现有 D1/R2/Secrets 均保持不变。
+- **D1 增量迁移**：`0018_rc12_file_experience.sql`，仅新增 `favorites` 表和索引，不删除历史用户、文件或分享记录。
+- **无需新增环境变量/Secret**。`SHARE_LINK_KEY` 原值不要更换。
+- **详细说明**：参见 [RC12 文件操作体验说明](docs/RC12_FILE_EXPERIENCE.md)。
+
+## RC11：安全边界、权限批量查询与免费版稳定性修复（既有稳定性修复）
+
+本版本在 RC10 原有链接找回与属性编辑功能上，新增 **D1 批量 ACL 查询**、分享记录批量状态计算、目录移动权限确认、回收站 SQL 参数安全拆批、限次分享耗尽后的预览阻断、按 IP 聚合登录失败限制，以及自动清理过期会话/密码授权等功能。**不修改已存文件、管理员密码、已有分享令牌、R2 对象或 Secret。**
+
+- Cloudflare Dashboard 保持 **Build Command `npm run build`、Deploy Command `npm run deploy`**。Build 新增迁移安全静态检查；远程增量迁移 `0017_rc11_security_performance.sql` 只增加索引。
+- 将文件夹移动至其他父目录可能扩大继承访问权限。**只有空间管理员可以移动**，并且必须明确确认；普通编辑者仍可重命名其有写权限的目录。
+- **限次分享**：未达到限额前，合法预览不扣下载次数；额度耗尽后，新的预览、下载与目录访问全部被拒绝。无法撤回已下载或通过预览保存的内容。
+- 自动清理：每日现有 Cron 维护中加入过期 `sessions`、`share_access`、失败登录和分享密码尝试记录的安全分批清理，不删除尚未到期的会话。
+- 本版本没有新增或更换 Worker Secret；尤其不要更换已有的 `SHARE_LINK_KEY`。API、兼容性和限制见 [RC11 安全与性能变更](docs/RC11_SECURITY_PERFORMANCE.md)。
+
+**升级生产环境前先备份 D1 和重要 R2 对象**。新加的 SQL 静态检查不等同于数据库备份，也不保证跨服务的自动回滚。
 
 ## RC10：再次分享直接显示原链接并编辑属性（推荐优先阅读）
 
@@ -66,7 +98,7 @@ RC7 在 RC6 的可靠性修复基础上，新增真实的跨授权空间“最�
 |---|---|---|---|
 | `BOOTSTRAP_TOKEN` | **Worker Settings → Variables and Secrets → Secret** | **首次创建管理员必需**；随机 32 字符以上，建议 64 位十六进制字符 | 管理员首次初始化验证。绝不写进 Git 或 Build 日志 |
 | `APP_NAME` | `wrangler.jsonc → vars` | 已有默认 `CloudDrive` | 网盘名称 |
-| `APP_STAGE` | `wrangler.jsonc → vars` | 已有默认 `rc8-share-management` | 版本诊断 |
+| `APP_STAGE` | `wrangler.jsonc → vars` | 已有默认 `rc13.3-folder-sync` | 版本诊断 |
 | `PUBLIC_BASE_URL` | `wrangler.jsonc → vars` | 默认空，可暂不填写 | **真实公开桶自定义 HTTPS 域名**；留空使用 Worker `/p/{id}` |
 | `SHARE_LINK_KEY` | Worker Runtime Secret | 建议设置稳定的 64 位十六进制字符 | 允许新/轮换后分享链接安全重新获取；旧哈希链接必须轮换 |
 | `CDN_ZONE_ID` / `CDN_PURGE_TOKEN` | Worker Runtime Secret（可选） | CDN 域名所属 Zone 和 Cache Purge API Token | 撤销公开直链时尝试清理 CDN 缓存 |

@@ -85,3 +85,27 @@ body { margin:0; font-family:system-ui,-apple-system,"Microsoft YaHei",sans-seri
  .cd-share-url .form-control {flex-basis:100%;width:100%;border-radius:.375rem!important}
  .cd-share-url .btn {margin-top:.4rem;border-radius:.375rem!important;flex:1 1 100%}
 }
+
+/* RC12: global search, favorite controls, lazy folder navigation and drag uploads. */
+.cd-explorer-layout {display:grid;grid-template-columns:minmax(185px,235px) minmax(0,1fr);gap:14px;align-items:start}
+.cd-explorer-tree {padding:8px;position:sticky;top:85px;max-height:calc(100vh - 106px);overflow-y:auto;overscroll-behavior:contain}
+.cd-explorer-content {min-width:0}
+.cd-folder-tree {display:flex;flex-direction:column;min-width:0}
+.cd-tree-row {min-height:31px;max-width:100%}
+.cd-tree-toggle {width:26px;min-width:26px;padding:0!important;color:var(--bs-secondary-color)}
+.cd-tree-name {padding:4px 5px!important;font-size:.81rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cd-tree-name.active {background:var(--bs-primary-bg-subtle);color:var(--bs-primary);font-weight:700}
+.cd-tree-more {font-size:.78rem!important}
+.cd-drop-overlay[hidden] {display:none}
+.cd-drop-overlay {position:absolute;z-index:45;inset:2px;border:2px dashed var(--bs-primary);border-radius:12px;background:var(--bs-primary-bg-subtle);display:flex;align-items:center;justify-content:center;text-align:center;padding:25px;font-weight:700;pointer-events:none;min-height:150px}
+#app-content {position:relative}
+.cd-task-progress progress {height:10px;accent-color:var(--bs-primary)}
+.cd-task-progress details {max-height:220px;overflow:auto}
+.cd-global-results {overflow:hidden}
+.cd-global-results>div:last-child {border-bottom:0!important}
+@media(max-width:900px){.cd-explorer-layout {grid-template-columns:1fr}.cd-explorer-tree {position:static;max-height:220px}.cd-explorer-content {width:100%}}
+@media(max-width:600px){.cd-global-results .btn{flex:1 1 80px}.cd-tree-name{font-size:.85rem}}
+
+/* RC13.4: build-free UTF-8 text editor in a Bootstrap modal */
+.cd-text-editor{width:100%;min-height:min(56vh,620px);height:56vh;tab-size:2;white-space:pre;overflow:auto;resize:vertical;line-height:1.55;font-size:.875rem}
+@media(max-width:640px){.cd-text-editor{height:55dvh;min-height:42dvh;font-size:.82rem}}

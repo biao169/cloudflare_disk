@@ -5,7 +5,7 @@ const keyFor=(space,folder,file)=>`cd-upload:${space}:${folder||'root'}:${file.n
 function readTask(key){try{return JSON.parse(localStorage.getItem(key)||'null')}catch{return null}}
 function writeTask(key,task){localStorage.setItem(key,JSON.stringify(task))}
 async function api(path,options={}){const r=await fetch(path,{credentials:'same-origin',...options});const j=await r.json().catch(()=>({}));if(!r.ok||!j.success)throw Error(j.error?.message||`HTTP ${r.status}`);return j.data}
-export function multipartUploadWidget(host,{space,folder,onFinished,onMessage}){
+export function multipartUploadWidget(host,{space,folder,onFinished,onMessage,onProgress}){
  const box=document.createElement('section');box.className='card p-3 mt-3';
  const title=document.createElement('strong');title.textContent='大文件上传';const progress=document.createElement('progress');progress.className='w-100 mt-2';progress.max=100;progress.value=0;
  const status=document.createElement('div');status.className='small text-muted mt-2';status.textContent='选择文件后开始上传；刷新页面后需重新选择相同文件续传。';
@@ -14,7 +14,7 @@ export function multipartUploadWidget(host,{space,folder,onFinished,onMessage}){
  const cancel=document.createElement('button');cancel.className='btn btn-outline-danger btn-sm';cancel.textContent='取消';cancel.disabled=true;
  const controls=document.createElement('div');controls.className='mt-2';controls.append(pause,resume,cancel);box.append(title,progress,status,controls);host.append(box);
  let state=null,paused=false,cancelled=false,controller=null,working=false;
- const show=(done,total,txt)=>{progress.value=Math.round(done/total*100);status.textContent=`${txt} · ${Math.round(done/MiB)} / ${Math.round(total/MiB)} MiB (${progress.value}%)`};
+ const show=(done,total,txt)=>{progress.value=Math.round(done/total*100);status.textContent=`${txt} · ${Math.round(done/MiB)} / ${Math.round(total/MiB)} MiB (${progress.value}%)`;onProgress?.(done,total)};
  pause.onclick=()=>{paused=true;pause.disabled=true;resume.disabled=false;status.textContent='暂停请求中；已完成的分片会保留。';controller?.abort()};
  resume.onclick=()=>{if(!state||working)return;paused=false;resume.disabled=true;pause.disabled=false;run()};
  cancel.onclick=async()=>{cancelled=true;paused=true;controller?.abort();if(state){try{await api(`/api/v1/uploads/${state.id}`,{method:'DELETE'})}catch(e){onMessage(`取消任务失败：${e.message}`)}localStorage.removeItem(state.key)}state=null;pause.disabled=resume.disabled=cancel.disabled=true;status.textContent='已取消上传任务'};
@@ -30,13 +30,14 @@ export function multipartUploadWidget(host,{space,folder,onFinished,onMessage}){
     const recovered=await api(`/api/v1/uploads/${state.id}/recover`,{method:'POST'});
     if(recovered.status==='completed'){
      localStorage.removeItem(state.key);show(state.file.size,state.file.size,'上传恢复完成');
-     pause.disabled=resume.disabled=cancel.disabled=true;state=null;onFinished?.();return;
+     pause.disabled=resume.disabled=cancel.disabled=true;state=null;onFinished?.();return {file_id:recovered.file_id,status:'completed'};
     }
     throw Error('合并仍未恢复，请稍后重试（不要重新上传整个文件）');
    }
    if(s.status==='completed'){
+    const finalized=await api(`/api/v1/uploads/${state.id}/complete`,{method:'POST'});
     localStorage.removeItem(state.key);show(state.file.size,state.file.size,'已上传完成');
-    pause.disabled=resume.disabled=cancel.disabled=true;state=null;onFinished?.();return;
+    pause.disabled=resume.disabled=cancel.disabled=true;state=null;onFinished?.();return finalized;
    }
    if(s.status!=='uploading')throw Error(`任务状态：${s.status}`);
    const completed=new Set(s.parts.map(p=>p.part_number));const total=Math.ceil(state.file.size/state.partSize);
@@ -45,17 +46,17 @@ export function multipartUploadWidget(host,{space,folder,onFinished,onMessage}){
    async function worker(){while(!paused&&!cancelled&&!failed){const index=cursor++;if(index>=jobs.length)return;const n=jobs[index];try{await send(n);completed.add(n);const done=[...completed].reduce((sum,num)=>sum+Math.min(state.partSize,state.file.size-(num-1)*state.partSize),0);show(done,state.file.size,'上传中')}catch(e){if(!paused&&!cancelled)failed=e;return}}}
    await Promise.all(Array.from({length:Math.min(3,jobs.length)},worker));
    if(failed)throw failed;if(paused||cancelled){status.textContent='已暂停，可继续';return}
-   status.textContent='分片已上传，正在合并…';await api(`/api/v1/uploads/${state.id}/complete`,{method:'POST'});
-   localStorage.removeItem(state.key);show(state.file.size,state.file.size,'上传完成');pause.disabled=resume.disabled=cancel.disabled=true;state=null;onFinished?.();
+   status.textContent='分片已上传，正在合并…';const complete=await api(`/api/v1/uploads/${state.id}/complete`,{method:'POST'});
+   localStorage.removeItem(state.key);show(state.file.size,state.file.size,'上传完成');pause.disabled=resume.disabled=cancel.disabled=true;state=null;onFinished?.();return complete;
   }catch(e){if(!paused&&!cancelled){status.textContent=`上传中断：${e.message}；点击继续重试`;resume.disabled=false;pause.disabled=true;onMessage?.(e.message)}}finally{working=false;if(paused&&!cancelled)resume.disabled=false}
  }
- async function start(file,spaceId,folderId){if(state&&working)throw Error('已有进行中的分片任务');
-  const key=keyFor(spaceId,folderId,file);let previous=readTask(key);let id,partSize;
+ async function start(file,spaceId,folderId,replace=null){if(state&&working)throw Error('已有进行中的分片任务');
+  const key=keyFor(spaceId,folderId,file)+(replace?`:replace:${replace.id}:${replace.revision}`:'');let previous=readTask(key);let id,partSize;
   if(previous){
    try{
     const s=await api(`/api/v1/uploads/${previous.id}`);
     if(s.total_bytes!==file.size)throw Error('文件与上次上传任务不匹配');
-    if(s.status==='completed'){localStorage.removeItem(key);onFinished?.();return;}
+    if(s.status==='completed'){localStorage.removeItem(key);const completed=await api(`/api/v1/uploads/${previous.id}/complete`,{method:'POST'});onFinished?.();return completed;}
     if(s.status==='aborted'){localStorage.removeItem(key);previous=null;}
     else if(['uploading','failed','verifying'].includes(s.status)){id=previous.id;partSize=s.part_size;}
     else throw Error(`需管理员确认的上传状态：${s.status}`);
@@ -64,8 +65,10 @@ export function multipartUploadWidget(host,{space,folder,onFinished,onMessage}){
     else throw e; // Do NOT silently start another large upload after a failed completion.
    }
   }
-  if(!previous){const s=await api('/api/v1/uploads',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:file.name,space_id:spaceId,folder_id:folderId,size_bytes:file.size,mime_type:file.type||'application/octet-stream'})});id=s.upload_id;partSize=s.part_size;writeTask(key,{id})}
-  state={key,id,partSize,file};paused=false;cancelled=false;await run();
+  if(!previous){const s=await api('/api/v1/uploads',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:file.name,space_id:spaceId,folder_id:folderId,size_bytes:file.size,mime_type:file.type||'application/octet-stream',replace_file_id:replace?.id||null,expected_revision:replace?.revision??null})});id=s.upload_id;partSize=s.part_size;writeTask(key,{id})}
+  state={key,id,partSize,file};paused=false;cancelled=false;const outcome=await run();
+  if(!outcome?.file_id)throw Error('分片任务尚未确认完成，请重新选择相同文件继续；不能将其记为同步成功');
+  return outcome;
  }
  return {start,dispose(){controller?.abort();box.remove()}};
 }

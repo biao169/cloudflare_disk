@@ -1,7 +1,9 @@
+import {preparePublicVersions,abandonPreparedPublic,synchronizePublicationOnCommit,PublicationUpdateError} from './public-versions.js';
 import {one,execute,dbFromEnv} from './database.js';
 import {RESERVE_SQL,settings} from './admin.js';
 import {spaceAccess,folderAccess,canFolder,canSpace,uuid,validName} from './spaces.js';
 import {ok,error} from '../utils/response.js';
+import {targetForReplace,commitReplacement} from './replacements.js';
 export const MAX_UPLOAD_BYTES=8*1024*1024;
 export const DEFAULT_QUOTA_BYTES=8*1024*1024*1024;
 export function uploadPermission(access){return Boolean(access);}
@@ -16,24 +18,44 @@ export function uploadInputs(request,url){
  const size=Number(request.headers.get('content-length'));
  const name=url.searchParams.get('name');const spaceId=url.searchParams.get('space_id');const folderId=url.searchParams.get('folder_id')||null;
  if(request.headers.get('content-length')===null||!Number.isSafeInteger(size)||size<0||size>MAX_UPLOAD_BYTES||!validName(name)||!spaceId||!/^[0-9a-f-]{36}$/.test(spaceId)||folderId&&!/^[0-9a-f-]{36}$/.test(folderId))return null;
- return {size,name:name.trim(),spaceId,folderId};
+ return {size,name:name.trim(),spaceId,folderId,replaceFileId:url.searchParams.get('replace_file_id'),expectedRevision:url.searchParams.get('expected_revision')};
 }
 export async function uploadFile(request,env,user){
  const db=dbFromEnv(env),bucket=storageBinding(env),input=uploadInputs(request,new URL(request.url));
  if(!input)return error('INVALID_UPLOAD',`需要有效的文件名称、空间 ID 和 Content-Length；单次最多 ${MAX_UPLOAD_BYTES} 字节`,400);
  const {size,name,spaceId,folderId}=input;
+ let target=null;
+ if(input.replaceFileId){
+  if(!/^[0-9a-f-]{36}$/.test(input.replaceFileId)||!/^\d+$/.test(input.expectedRevision||''))return error('INVALID_REPLACEMENT','替换目标或修订号无效',400);
+  const lookup=await targetForReplace(db,user,input.replaceFileId,{spaceId,folderId,name,revision:Number(input.expectedRevision)});
+  if(lookup.error)return error(lookup.error,'替换目标已变更或权限不足',lookup.status);
+  target=lookup.file;
+ }
  if(!(await settings(db)).uploads_enabled)return error('UPLOAD_DISABLED','管理员已暂停上传',403);
  if(!await destinationAllowed(db,user,spaceId,folderId))return error('FORBIDDEN','没有上传权限',403);
  const existing=await one(db,"SELECT id FROM files WHERE space_id=? AND folder_id IS ? AND name=? COLLATE NOCASE AND deleted_at IS NULL AND status!='deleted'",[spaceId,folderId,name]);
- if(existing)return error('NAME_CONFLICT','存在同名文件',409);
+ if(existing&&existing.id!==target?.id)return error('NAME_CONFLICT','存在同名文件',409);
+ if(!target&&existing)return error('NAME_CONFLICT','存在同名文件',409);
  const reservation=await execute(db,RESERVE_SQL,[size,spaceId,size,DEFAULT_QUOTA_BYTES,size,DEFAULT_QUOTA_BYTES]);
  if(!reservation.meta?.changes)return error('QUOTA_EXCEEDED','空间剩余容量不足',413);
  const objectId=uuid(),fileId=uuid(),key=`private/${spaceId}/${objectId}`,mime=(request.headers.get('content-type')||'application/octet-stream').split(';')[0].slice(0,120);
- let stored=false;
+ let stored=false,preparedPublic=null,committed=false,commitAttempted=false;
  try{
   // Streaming upload; Worker never buffers the entire file.
   const obj=await bucket.put(key,request.body,{httpMetadata:{contentType:mime}});stored=true;
   if(obj.size!==size)throw new Error('Uploaded object size mismatch');
+  if(target){
+   const current=await targetForReplace(db,user,target.id,{spaceId,folderId,name,revision:target.revision});
+   if(current.error)throw new Error('VERSION_CONFLICT');
+   preparedPublic=await preparePublicVersions(env,db,{file:target,newPrivateKey:key,size,mime,revision:target.revision+1});
+   commitAttempted=true;
+   const result=await commitReplacement(db,{file:target,newObjectId:objectId,key,etag:obj.etag??null,size,mime,userId:user.id,reservedBytes:size,preparedPublic});
+   if(result.conflict)throw new Error('VERSION_CONFLICT');
+   committed=true;
+   // A failed legacy-CDN cache refresh must never roll back a committed file.
+   try{await synchronizePublicationOnCommit(env,preparedPublic)}catch(e){console.warn('RC13.2 public alias queued for retry',e);}
+   return ok({...result,name,size_bytes:size,mime_type:mime,replaced:true});
+  }
   // D1 batch acts atomically for metadata + accounting. R2 remains a separate service.
   await db.batch([
    db.prepare("INSERT INTO storage_objects(id,bucket_type,object_key,size_bytes,etag,status) VALUES(?,'private',?,?,?,'ready')").bind(objectId,key,size,obj.etag??null),
@@ -43,6 +65,21 @@ export async function uploadFile(request,env,user){
   return ok({id:fileId,name,size_bytes:size,mime_type:mime},201);
  }catch(e){
   console.error('Upload failed',e);
+  if(commitAttempted&&!committed&&target){
+   try{
+    const actual=await one(db,'SELECT revision FROM files WHERE id=? AND object_id=?',[target.id,objectId]);
+    if(actual){
+     // A lost D1 response is not proof that the transaction failed.
+     try{await synchronizePublicationOnCommit(env,preparedPublic)}catch{}
+     return ok({file_id:target.id,revision:actual.revision,replaced:true,warning:'COMMIT_RESPONSE_INTERRUPTED'});
+    }
+   }catch(uncertain){
+    console.error('CRITICAL: D1 commit outcome is unknown; preserving R2 objects for reconciliation',uncertain);
+    return error('COMMIT_OUTCOME_UNKNOWN','数据库无法确认替换是否已提交，已保留文件对象以防误删，请管理员核对',503);
+   }
+  }
+  if(!committed&&preparedPublic)await abandonPreparedPublic(env,db,preparedPublic);
+  if(committed)return error('COMMITTED_POSTPROCESS_FAILED','文件版本已更新，请刷新后检查公开同步状态',503);
   let mayExist=stored;
   if(!stored){try{mayExist=Boolean(await bucket.head(key))}catch{mayExist=true;}}
   let keepReservation=false;
@@ -64,7 +101,7 @@ export async function uploadFile(request,env,user){
    try{await execute(db,'UPDATE spaces SET reserved_bytes=MAX(0,reserved_bytes-?) WHERE id=?',[size,spaceId])}
    catch(cleanupError){console.error('Reservation cleanup failed',cleanupError)}
   }
-  return error('UPLOAD_FAILED','文件上传失败，未建立可见文件记录',503);
+  return e instanceof PublicationUpdateError?error(e.code,e.message,e.status):error(String(e?.message)==='VERSION_CONFLICT'?'VERSION_CONFLICT':'UPLOAD_FAILED',String(e?.message)==='VERSION_CONFLICT'?'文件已由其他成员更新，请重新读取最新版本':'文件上传失败，未建立可见文件记录',String(e?.message)==='VERSION_CONFLICT'?409:503);
  }
 }
 export const PREVIEW_MIME_TYPES = new Set(['image/jpeg','image/png','image/webp','image/gif','video/mp4','video/webm','application/pdf']);
@@ -97,6 +134,11 @@ export async function downloadFile(request,env,user,fileId,{preview=false}={}){
  if(!access)return error('NOT_FOUND','文件不存在',404);
  if(file.folder_id){const folder=await folderAccess(db,user,file.folder_id);if(!folder||!canFolder(folder,'read'))return error('NOT_FOUND','文件不存在',404)}
  else if(!canSpace(access,'read'))return error('NOT_FOUND','文件不存在',404);
+ return servePrivateObject(request,bucket,file,{preview});
+}
+// Accessible only after a route performs current file/space/folder ACL checks.
+// Historical versions share the same streaming Range, ETag, signature and no-store policy.
+export async function servePrivateObject(request,bucket,file,{preview=false}={}){
  if(preview&&!previewAllowed(file.mime_type))return error('PREVIEW_UNSUPPORTED','不支持在线预览此类型文件',415);
  if(preview&&!(await validatePreviewObject(bucket,file.object_key,file.mime_type)))return error('PREVIEW_INVALID','文件内容与预览类型不符',415);
  // If-Range permits partial content only while the stored object ETag is unchanged.

@@ -12,6 +12,7 @@
       "/s/*",
       "/t/*",
       "/p/*",
+      "/r/*",
       "/",
       "/index.html",
       "/login",
@@ -20,6 +21,8 @@
       "/personal",
       "/spaces",
       "/recent",
+      "/favorites",
+      "/search",
       "/shares",
       "/trash",
       "/users",
@@ -29,7 +32,7 @@
   },
   "vars": {
     "APP_NAME": "CloudDrive",
-    "APP_STAGE": "rc10-existing-links",
+    "APP_STAGE": "rc13.4-text-version-management",
     "PUBLIC_BASE_URL": ""
   },
   "r2_buckets": [

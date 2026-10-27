@@ -1,10 +1,10 @@
-import {temporaryLink,publicPublishedFile} from './api/shares.js';
+import {temporaryLink,publicPublishedFile,smartPublishedFile} from './api/shares.js';
 import {runMaintenance,recordIncident} from './services/operations.js';
 import {protectHtml} from './services/security-headers.js';
 import {route,json} from './router.js';
 import {resolveUser} from './services/auth.js';
 
-const APP_PAGES=new Set(['/','/index.html','/files','/personal','/spaces','/recent','/shares','/trash','/users','/settings']);
+const APP_PAGES=new Set(['/','/index.html','/files','/personal','/spaces','/recent','/favorites','/search','/shares','/trash','/users','/settings']);
 // Static Assets default HTML canonicalization redirects /login.html -> /login.
 // Since /login is Worker-routed, that would become an infinite redirect loop.
 // wrangler.jsonc sets assets.html_handling='none' to serve these explicit files.
@@ -33,6 +33,7 @@ export default {
    if(p.startsWith('/api/'))return json({success:false,error:{code:'NOT_FOUND',message:'接口不存在'}},404);
    if(p.startsWith('/t/')){const result=await temporaryLink(request,env,p);if(result.status>=500)await recordIncident(env,{source:'share.response',code:`HTTP_${result.status}`});return result;}
    if(p.startsWith('/p/')){const result=await publicPublishedFile(request,env,p);if(result.status>=500)await recordIncident(env,{source:'share.response',code:`HTTP_${result.status}`});return result;}
+   if(p.startsWith('/r/')){const result=await smartPublishedFile(request,env,p);if(result.status>=500)await recordIncident(env,{source:'share.response',code:`HTTP_${result.status}`});return result;}
    if(p.startsWith('/s/'))return assetPage(request,env,'/share.html');
    if(p==='/login'||p==='/setup')return assetPage(request,env,'/login.html');
    if(APP_PAGES.has(p)){

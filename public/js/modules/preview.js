@@ -3,7 +3,7 @@ export const SUPPORTED_PREVIEW_MIME = new Set(['image/jpeg','image/png','image/w
 export function canPreview(file){return SUPPORTED_PREVIEW_MIME.has(String(file?.mime_type||'').toLowerCase());}
 export function previewUrl(id){if(!/^[0-9a-f-]{36}$/.test(id))throw Error('无效文件 ID');return `/api/v1/files/${encodeURIComponent(id)}/preview`;}
 let active=null;
-export function openPreview(file,files=[],{onError=console.error}={}){
+export function openPreview(file,files=[],{onError=console.error,urlOverride=null}={}){
  if(!canPreview(file)){onError('该文件类型不支持在线预览');return;}
  if(active)active.close();
  const shell=document.createElement('div');shell.className='cd-preview-backdrop';shell.setAttribute('role','dialog');shell.setAttribute('aria-modal','true');shell.setAttribute('aria-label','文件预览');
@@ -17,7 +17,7 @@ export function openPreview(file,files=[],{onError=console.error}={}){
  const close=()=>{document.removeEventListener('keydown',keydown);shell.remove();active=null;};
  let current=file,scale=1,rotation=0;
  const images=files.filter(f=>String(f.mime_type).startsWith('image/')&&canPreview(f));
- function render(){stage.replaceChildren();name.textContent=current.name;const url=previewUrl(current.id);scale=1;rotation=0;hint.textContent='';
+ function render(){stage.replaceChildren();name.textContent=current.name;const url=urlOverride||previewUrl(current.id);scale=1;rotation=0;hint.textContent='';
   if(current.mime_type.startsWith('image/')){const img=document.createElement('img');img.className='cd-preview-image';img.alt=current.name;img.src=url;img.onerror=()=>{hint.textContent='预览加载失败，请检查文件内容或访问权限';};stage.append(img);}
   else if(current.mime_type.startsWith('video/')){const video=document.createElement('video');video.controls=true;video.preload='metadata';video.playsInline=true;video.src=url;video.addEventListener('error',()=>{hint.textContent='视频无法播放，可能是浏览器不支持该编码或文件不可用';});stage.append(video);}
   else if(current.mime_type==='application/pdf'){const frame=document.createElement('iframe');frame.title=`预览 ${current.name}`;frame.src=url;stage.append(frame);}

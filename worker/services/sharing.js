@@ -1,3 +1,4 @@
+import {finishStorageCleanup} from './cleanup.js';
 import {one,many,execute,dbFromEnv} from './database.js';
 import {spaceAccess,folderAccess,canFolder,canSpace,uuid} from './spaces.js';
 import {randomToken,sha256,passwordHash,checkPassword} from './auth.js';
@@ -28,7 +29,7 @@ export async function target(db,user,type,id){
 export async function resolveShare(db,code){
  if(!validShareCode(code))return null;
  const s=await one(db,'SELECT * FROM shares WHERE share_code_hash=?',[await sha256(code)]);
- if(!shareIsActive(s))return null;
+ if(!shareIsActive(s)||(s.max_downloads&&s.download_count>=s.max_downloads))return null;
   // Revocation is checked at request time as well as at membership-change time.
   // This also handles disabled accounts, revoked folder ACLs and file moves,
   // without ever exposing an old public token if a D1 write was interrupted.
@@ -75,6 +76,9 @@ export async function listOwnedShares(db,user){return many(db,'SELECT * FROM sha
 export function shareHeaders(){return {'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','Cross-Origin-Resource-Policy':'same-origin'};}
 export async function serveSharedFile(req,env,s,fileId,{preview=false}={}){
  const db=dbFromEnv(env);
+ // Exhausted download grants deny both previews and content; previews still
+ // do not count as downloads while a grant remains usable.
+ if(!shareIsActive(s)||(s.max_downloads&&s.download_count>=s.max_downloads))return error('SHARE_LIMIT','分享已失效或下载次数已用完',403);
  if(s.target_type==='file'&&s.target_id!==fileId)return error('NOT_FOUND','文件不存在',404);
  const f=await one(db,"SELECT f.*,o.object_key,o.status AS object_status,o.bucket_type FROM files f JOIN storage_objects o ON o.id=f.object_id WHERE f.id=? AND f.deleted_at IS NULL AND f.status='ready'",[fileId]);
  if(!f||f.object_status!=='ready'||f.bucket_type!=='private')return error('NOT_FOUND','文件不存在',404);
@@ -108,39 +112,67 @@ export function cdnBaseUrl(value){
  try{const u=new URL(value);return u.protocol==='https:'&&!u.username&&!u.password&&u.pathname==='/'&&!u.search&&!u.hash?u.origin:null;}catch{return null;}
 }
 export function publicationUrl(req,env,p){const domain=cdnBaseUrl(env.PUBLIC_BASE_URL);return domain?`${domain}/${p.public_path}`:`${new URL(req.url).origin}/p/${p.id}`;}
-export async function purgePublicationCache(env,p){
+export async function purgePublicationCache(env,p,{extraPaths=[]}={}){
  const domain=cdnBaseUrl(env.PUBLIC_BASE_URL);
  if(!domain||!env.CDN_ZONE_ID||!env.CDN_PURGE_TOKEN)return {purged:false,reason:'CDN_PURGE_NOT_CONFIGURED'};
  if(!/^[a-f0-9]{32}$/i.test(env.CDN_ZONE_ID))return {purged:false,reason:'CDN_ZONE_ID_INVALID'};
+ const paths=[p.public_path,...extraPaths].filter(x=>/^(?:published|versions)\/[A-Za-z0-9/_-]+$/.test(x));
+ const unique=[...new Set(paths)];
+ if(!unique.length)return {purged:false,reason:'NO_PUBLIC_PATHS'};
+ // Per-URL purge (not Purge Everything). Bound API calls per request, and
+ // surface any remaining version URLs that could still be CDN-cached.
+ let purged=0;
  try{
-  const response=await fetch(`https://api.cloudflare.com/client/v4/zones/${env.CDN_ZONE_ID}/purge_cache`,{
-   method:'POST',headers:{Authorization:`Bearer ${env.CDN_PURGE_TOKEN}`,'Content-Type':'application/json'},
-   body:JSON.stringify({files:[`${domain}/${p.public_path}`]})
-  });
-  const result=await response.json();
-  return {purged:Boolean(response.ok&&result.success),reason:response.ok&&result.success?null:'CDN_PURGE_FAILED'};
- }catch(err){console.warn('CloudDrive cache purge failed',err?.message||err);return {purged:false,reason:'CDN_PURGE_FAILED'};}
+  for(let i=0;i<Math.min(unique.length,90);i+=25){
+   const files=unique.slice(i,i+25).map(x=>`${domain}/${x}`);
+   const response=await fetch(`https://api.cloudflare.com/client/v4/zones/${env.CDN_ZONE_ID}/purge_cache`,{
+    method:'POST',headers:{Authorization:`Bearer ${env.CDN_PURGE_TOKEN}`,'Content-Type':'application/json'},
+    body:JSON.stringify({files})
+   });
+   const result=await response.json();
+   if(!response.ok||!result.success)return {purged:false,reason:'CDN_PURGE_FAILED',purged_urls:purged};
+   purged+=files.length;
+  }
+  return {purged:purged===unique.length,reason:purged===unique.length?null:'CDN_PURGE_PARTIAL',purged_urls:purged,remaining:unique.length-purged};
+ }catch(err){console.warn('CloudDrive cache purge failed',err?.message||err);return {purged:false,reason:'CDN_PURGE_FAILED',purged_urls:purged};}
 }
 // A public copy consumes physical storage and must be included in application
 // quotas. Revocation is idempotent even if R2 delete succeeded but D1 failed.
 export async function revokePublication(env,db,publication){
- const p=publication;
- const source=await one(db,'SELECT space_id FROM files WHERE id=?',[p.source_file_id]);
- if(!source)throw Error('Publication source unavailable');
- const object=await one(db,'SELECT object_key,size_bytes FROM storage_objects WHERE id=?',[p.public_object_id]);
- if(!object)throw Error('Publication R2 metadata unavailable');
- if(!env.PUBLIC_BUCKET?.delete)throw Error('PUBLIC_BUCKET missing');
- await env.PUBLIC_BUCKET.delete(object.object_key);
+ const p=await one(db,"SELECT * FROM publications WHERE id=? AND status='ready'",[publication.id]);
+ if(!p)throw new Error('Publication already revoked or missing');
+ const f=await one(db,'SELECT space_id FROM files WHERE id=?',[p.source_file_id]);
+ if(!f)throw new Error('Publication owner space unavailable');
+ if(!env.PUBLIC_BUCKET?.delete)throw new Error('PUBLIC_BUCKET missing');
+ const pending=await one(db,"SELECT COALESCE(SUM(reserved_alias_bytes),0) AS bytes FROM publication_sync_jobs WHERE publication_id=? AND status NOT IN ('completed','superseded')",[p.id]);
+ // A single bounded D1 transaction revokes access and queues EVERY public
+ // version/alias for deletion. It does not issue one D1 statement per version.
  await db.batch([
-  db.prepare("UPDATE spaces SET used_bytes=MAX(0,used_bytes-(SELECT CASE WHEN p.status='ready' THEN o.size_bytes ELSE 0 END FROM publications p JOIN storage_objects o ON o.id=p.public_object_id WHERE p.id=?)) WHERE id=?").bind(p.id,source.space_id),
-  db.prepare("UPDATE publications SET status='revoked' WHERE id=? AND status='ready'").bind(p.id),
-  db.prepare("UPDATE storage_objects SET status='deleted' WHERE id=?").bind(p.public_object_id)
+  db.prepare("UPDATE publications SET status='revoked',sync_state='ready',updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='ready'").bind(p.id),
+  db.prepare("UPDATE publication_sync_jobs SET status='superseded',reserved_alias_bytes=0,updated_at=CURRENT_TIMESTAMP WHERE publication_id=? AND status NOT IN ('completed','superseded')").bind(p.id),
+  db.prepare('UPDATE spaces SET reserved_bytes=MAX(0,reserved_bytes-?) WHERE id=?').bind(pending?.bytes||0,f.space_id),
+  db.prepare(`INSERT OR IGNORE INTO storage_cleanup_jobs(id,object_id,object_key,bucket_type,space_id,size_bytes)
+   SELECT lower(hex(randomblob(16))),o.id,o.object_key,'public',?,o.size_bytes
+   FROM storage_objects o WHERE o.bucket_type='public' AND o.status='ready' AND o.id IN (
+    SELECT object_id FROM publication_versions WHERE publication_id=?
+    UNION SELECT public_object_id FROM publications WHERE id=?
+    UNION SELECT legacy_object_id FROM publications WHERE id=? AND legacy_object_id IS NOT NULL)`)
+   .bind(f.space_id,p.id,p.id,p.id)
  ]);
- return await purgePublicationCache(env,{...p,public_path:p.public_path||object.object_key});
+ // Bounded best-effort immediate deletion; the durable queue is retried by Cron.
+ const jobs=await many(db,"SELECT * FROM storage_cleanup_jobs WHERE bucket_type='public' AND object_id IN (SELECT object_id FROM publication_versions WHERE publication_id=? UNION SELECT public_object_id FROM publications WHERE id=? UNION SELECT legacy_object_id FROM publications WHERE id=?) LIMIT 5",[p.id,p.id,p.id]);
+ let pendingCount=0;
+ for(const job of jobs)try{await finishStorageCleanup(env,job);}catch(e){pendingCount++;console.warn('Public revocation cleanup deferred',e?.message||e);}
+ const keys=await many(db,`SELECT DISTINCT o.object_key FROM publication_versions v JOIN storage_objects o ON o.id=v.object_id
+  WHERE v.publication_id=?`,[p.id]);
+ const cache=await purgePublicationCache(env,{...p,public_path:p.public_path||publication.public_path},
+  {extraPaths:keys.map(x=>x.object_key)});
+ return {...cache,cleanup_pending:pendingCount};
 }
 export async function publishFile(req,env,user,fileId){
  const db=dbFromEnv(env);const f=await target(db,user,'file',fileId);if(!f)return error('FORBIDDEN','没有发布权限',403);
  if(user.role!=='super_admin')return error('FORBIDDEN','只有超级管理员可以发布永久公开文件',403);
+ if(f.size_bytes>5*1024**3-5*1024**2)return error('PUBLIC_COPY_TOO_LARGE','目前公开发布需小于 R2 单次复制上限',413);
  if(env.PUBLIC_BASE_URL && !cdnBaseUrl(env.PUBLIC_BASE_URL))return error('PUBLIC_URL_INVALID','公开域名必须是 HTTPS 主机名（不可包含路径或查询参数）',503);
  if(!env.PUBLIC_BUCKET?.put)return error('PUBLIC_BUCKET_UNSET','公开 R2 Binding 未配置',503);
  const source=await one(db,"SELECT o.object_key FROM files f JOIN storage_objects o ON o.id=f.object_id WHERE f.id=? AND o.status='ready'",[fileId]);if(!source)return error('NOT_FOUND','文件不可用',404);
@@ -153,14 +185,15 @@ export async function publishFile(req,env,user,fileId){
   const object=await env.PRIVATE_BUCKET.get(source.object_key);if(!object)throw new Error('Private source missing');
   const mime=['image/jpeg','image/png','image/webp','image/gif','video/mp4','video/webm','application/pdf'].includes(f.mime_type)?f.mime_type:'application/octet-stream';
   const disposition=`${mime==='application/octet-stream'?'attachment':'inline'}; filename*=UTF-8''${encodeURIComponent(f.name)}`;
-  const saved=await env.PUBLIC_BUCKET.put(key,object.body,{httpMetadata:{contentType:mime,contentDisposition:disposition}});created=true;
+  const saved=await env.PUBLIC_BUCKET.put(key,object.body,{httpMetadata:{contentType:mime,contentDisposition:disposition,cacheControl:'public, max-age=0, must-revalidate'}});created=true;
   if(saved.size!==f.size_bytes)throw new Error('Published file size mismatch');
   await db.batch([
    db.prepare("INSERT INTO storage_objects(id,bucket_type,object_key,size_bytes,etag,status) VALUES(?,'public',?,?,?,'ready')").bind(publicId,key,f.size_bytes,saved.etag||null),
-   db.prepare("INSERT INTO publications(id,source_file_id,public_object_id,public_path,status,created_by) VALUES(?,?,?,?,'ready',?)").bind(pid,fileId,publicId,key,user.id),
+   db.prepare("INSERT INTO publications(id,source_file_id,public_object_id,public_path,status,created_by,published_revision,legacy_object_id) VALUES(?,?,?,?,'ready',?,?,?)").bind(pid,fileId,publicId,key,user.id,f.revision||1,publicId),
+   db.prepare('INSERT INTO publication_versions(id,publication_id,file_revision,object_id) VALUES(?,?,?,?)').bind(uuid(),pid,f.revision||1,publicId),
    db.prepare('UPDATE spaces SET reserved_bytes=reserved_bytes-?,used_bytes=used_bytes+? WHERE id=?').bind(f.size_bytes,f.size_bytes,f.space_id)
   ]);
-  return ok({id:pid,url,delivery:cdnBaseUrl(env.PUBLIC_BASE_URL)?'cdn':'worker',warning:cdnBaseUrl(env.PUBLIC_BASE_URL)?'CDN 可能缓存已撤销文件；建议配置按 URL 清理缓存':'尚未绑定公开 R2 自定义域名，当前文件经 Worker /p/ 下载'},201);
+  return ok({id:pid,url:`${new URL(req.url).origin}/r/${pid}`,smart_url:`${new URL(req.url).origin}/r/${pid}`,legacy_url:url,delivery:cdnBaseUrl(env.PUBLIC_BASE_URL)?'cdn':'worker',warning:cdnBaseUrl(env.PUBLIC_BASE_URL)?'CDN 可能缓存已撤销文件；建议配置按 URL 清理缓存':'尚未绑定公开 R2 自定义域名，当前文件经 Worker /p/ 下载'},201);
  }catch(e){
   console.error('Publication error',e);
   if(created){try{await env.PUBLIC_BUCKET.delete(key)}catch(cleanupError){
