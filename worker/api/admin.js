@@ -1,3 +1,6 @@
+import {oneDriveOperationalStatus} from '../services/onedrive-maintenance.js';
+import {startOAuth,finishOAuth,graphResolve,connectionStatus,disconnect} from '../services/onedrive-oauth.js';
+import {oneDriveStats} from '../services/onedrive-quota.js';
 import {reconcileLedger,scanR2Bucket} from '../services/reconcile.js';
 import {dbFromEnv,one,many,execute} from '../services/database.js';
 import {resolveUser,jsonBody} from '../services/auth.js';
@@ -8,6 +11,19 @@ export async function adminRoute(req,env,path){
  const user=await resolveUser(req,env);if(!user)return error('UNAUTHORIZED','请先登录',401);
  if(user.role!=='super_admin')return error('FORBIDDEN','仅超级管理员可操作',403);
  const db=dbFromEnv(env),method=req.method;
+ if(path==='/api/v1/admin/onedrive/oauth/start'&&req.method==='GET'){
+  try{return ok({authorization_url:await startOAuth(req,env,user.id)});}catch(e){return error('OAUTH_CONFIG_ERROR',e.message,503);}
+ }
+ if(path==='/api/v1/admin/onedrive/oauth/callback'&&req.method==='GET'){
+  try{await finishOAuth(req,env,user.id);return new Response(null,{status:302,headers:{Location:'/tools/onedrive?connected=1','Cache-Control':'no-store'}});}catch(e){return error('OAUTH_CALLBACK_ERROR',e.message,400);}
+ }
+ if(path==='/api/v1/admin/onedrive/oauth'&&req.method==='GET')return ok(await connectionStatus(env));
+ if(path==='/api/v1/admin/onedrive/oauth'&&req.method==='DELETE'){await disconnect(env);return ok({connected:false});}
+ if(path==='/api/v1/admin/onedrive/graph/resolve'&&req.method==='POST'){
+  let body;try{body=await jsonBody(req);}catch{return error('INVALID_JSON','Invalid JSON',400);}
+  try{return ok(await graphResolve(env,body?.url));}catch(e){return error(e.message||'GRAPH_FAILED','微软授权解析失败：'+String(e.message),e.message==='MICROSOFT_THROTTLED'?429:400);}
+ }
+
  if(path==='/api/v1/admin/settings'){
   if(method==='GET')return ok(await settings(db));
   if(method==='PATCH'){
@@ -18,6 +34,7 @@ export async function adminRoute(req,env,path){
    return ok(await settings(db));
   }
  }
+ if(path==='/api/v1/admin/onedrive/stats'&&method==='GET')return ok({...await oneDriveStats(db),operations:await oneDriveOperationalStatus(db)});
  if(path==='/api/v1/admin/storage'&&method==='GET')return ok({...(await metrics(db)),settings:await settings(db)});
  if(path==='/api/v1/admin/dashboard'&&method==='GET'){
   const [usage,preferences,operations]=await Promise.all([metrics(db),settings(db),operationsSummary(db)]);

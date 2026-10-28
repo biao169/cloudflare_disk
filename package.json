@@ -1,9 +1,9 @@
 {
   "name": "clouddrive",
-  "version": "1.0.0-rc.13.5",
+  "version": "1.0.0-rc.14.5",
   "private": true,
   "type": "module",
-  "description": "CloudDrive RC13.5: legacy CDN compatibility, retry, private history retention and operations visibility",
+  "description": "CloudDrive RC14.5: OneDrive security and operations",
   "scripts": {
     "dev": "wrangler dev --local",
     "build": "npm run check:migrations && npm run test:all",

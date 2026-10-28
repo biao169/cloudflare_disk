@@ -1,3 +1,4 @@
+import {pruneOneDriveRecords} from './onedrive-maintenance.js';
 import {syncPendingPublications,pruneOldPublicVersions} from './public-versions.js';
 import {pruneFolderSync} from './folder-sync.js';
 import {prunePrivateVersions} from './version-retention.js';
@@ -42,7 +43,7 @@ export async function pruneAuthRecords(db,{batchSize=20}={}){
 
 // A single lease prevents an admin click and a Cron Trigger from both cleaning
 // the same objects. Bounded units keep work within Workers Free CPU/D1 budgets.
-export async function runMaintenance(env,{source='cron',actorId=null,tasks=['uploads','storage','trash','auth','publications','history']}={}){
+export async function runMaintenance(env,{source='cron',actorId=null,tasks=['uploads','storage','trash','auth','publications','history','onedrive']}={}){
  const db=dbFromEnv(env);
  const preferences=await settings(db);
  if(source==='cron'&&preferences.maintenance_paused)return {status:'skipped',reason:'MAINTENANCE_PAUSED'};
@@ -59,7 +60,8 @@ export async function runMaintenance(env,{source='cron',actorId=null,tasks=['upl
    ['trash',()=>cleanupTrash(env,{limit:1})],
    ['auth',async()=>({...await pruneAuthRecords(db,{batchSize:20}),folder_sync:await pruneFolderSync(db,{limit:10})})],
    ['publications',async()=>({sync:await syncPendingPublications(env,{limit:1}),prune:await pruneOldPublicVersions(env,{limit:1})})],
-   ['history',()=>prunePrivateVersions(env,{limit:1,keep:1,graceDays:7})]
+   ['history',()=>prunePrivateVersions(env,{limit:1,keep:1,graceDays:7})],
+   ['onedrive',()=>pruneOneDriveRecords(db,{batchSize:100})]
   ].filter(([name])=>tasks.includes(name))){
    try{summary[name]=await fn();
     const pending=Number(summary[name]?.failed||0) > 0 || (name==='storage'&&Number(summary[name]?.attempted)>Number(summary[name]?.cleaned)) ||

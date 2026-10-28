@@ -1,6 +1,6 @@
 import {one,many,execute,dbFromEnv} from './database.js';
-export const SETTING_KEYS=['site_name','max_storage_bytes','default_share_days','trash_retention_days','uploads_enabled','public_shares_enabled','quota_warn_percent','maintenance_paused','incident_retention_days','backup_reminder_days'];
-export const DEFAULT_SETTINGS={site_name:'CloudDrive',max_storage_bytes:8*1024*1024*1024,default_share_days:7,trash_retention_days:7,uploads_enabled:true,public_shares_enabled:true,quota_warn_percent:85,maintenance_paused:false,incident_retention_days:30,backup_reminder_days:7};
+export const SETTING_KEYS=['site_name','max_storage_bytes','default_share_days','trash_retention_days','uploads_enabled','public_shares_enabled','quota_warn_percent','maintenance_paused','incident_retention_days','backup_reminder_days','onedrive_tool_enabled','onedrive_anonymous_enabled','onedrive_guest_minute_limit','onedrive_guest_hour_limit','onedrive_guest_day_limit','onedrive_user_minute_limit','onedrive_user_hour_limit','onedrive_user_day_limit'];
+export const DEFAULT_SETTINGS={site_name:'CloudDrive',max_storage_bytes:8*1024*1024*1024,default_share_days:7,trash_retention_days:7,uploads_enabled:true,public_shares_enabled:true,quota_warn_percent:85,maintenance_paused:false,incident_retention_days:30,backup_reminder_days:7,onedrive_tool_enabled:true,onedrive_anonymous_enabled:true,onedrive_guest_minute_limit:3,onedrive_guest_hour_limit:10,onedrive_guest_day_limit:50,onedrive_user_minute_limit:10,onedrive_user_hour_limit:60,onedrive_user_day_limit:300};
 export function validateSettings(input){
  if(!input||typeof input!=='object'||Array.isArray(input))return null;
  const out={};
@@ -11,6 +11,7 @@ export function validateSettings(input){
   else if(['default_share_days','trash_retention_days'].includes(key)){if(!Number.isInteger(val)||val<1||val>365)return null;out[key]=val;}
   else if(key==='quota_warn_percent'){if(!Number.isInteger(val)||val<50||val>99)return null;out[key]=val;}
   else if(key==='incident_retention_days'){if(!Number.isInteger(val)||val<7||val>90)return null;out[key]=val;}
+  else if(key.startsWith('onedrive_')&&key.endsWith('_limit')){if(!Number.isSafeInteger(val)||val<1||val>10000)return null;out[key]=val;}
   else if(key==='backup_reminder_days'){if(!Number.isInteger(val)||val<1||val>30)return null;out[key]=val;}
   else {if(typeof val!=='boolean')return null;out[key]=val;}
  }

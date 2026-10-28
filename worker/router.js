@@ -1,3 +1,4 @@
+import {onedriveRoute} from './api/onedrive.js';
 import {replacementRoute,versionRoutePattern} from './api/replacements.js';
 import {textEditorRoute,textRoutePattern} from './api/text-editor.js';
 import {folderSyncRoute} from './api/folder-sync.js';
@@ -25,6 +26,7 @@ export async function route(request,env){
  if(!pathname.startsWith('/api/'))return null;
  try{
   if(!['GET','HEAD','OPTIONS'].includes(request.method)&&!(await csrfAllowed(request)))return error('INVALID_ORIGIN','跨站请求被拒绝',403);
+  if(pathname.startsWith('/api/v1/tools/onedrive/'))return await onedriveRoute(request,env,pathname);
   if(pathname.startsWith('/api/v1/folder-sync/'))return await folderSyncRoute(request,env,pathname);
   if(pathname.startsWith('/api/v1/admin/'))return await adminRoute(request,env,pathname);
   if(pathname==='/api/v1/trash'||pathname.startsWith('/api/v1/trash/'))return await trashRoute(request,env,pathname);
