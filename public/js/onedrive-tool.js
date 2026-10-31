@@ -1,4 +1,9 @@
+import {addMicrosoftOauthNotice} from './utils/microsoft-oauth-feedback.js';
 const form=document.getElementById('od-form'),out=document.getElementById('od-result');
+addMicrosoftOauthNotice(document.querySelector('main'));
+if(new URLSearchParams(location.search).get('connected')==='1'){
+ const banner=document.createElement('div');banner.className='alert alert-success small mb-3';banner.textContent='Microsoft 账户已完成授权，可以返回系统设置浏览并发布文件。';document.querySelector('main')?.prepend(banner);
+}
 function message(text,kind='secondary'){out.replaceChildren();const p=document.createElement('div');p.className=`alert alert-${kind}`;p.textContent=text;out.appendChild(p);}
 async function checkStatus(){try{const r=await fetch('/api/v1/tools/onedrive/status',{credentials:'same-origin'}),data=await r.json();if(!data.success){message(data.error?.message||'工具当前不可用','warning');form.querySelector('button').disabled=true;}}catch{message('无法读取工具状态','warning');}}
 form.addEventListener('submit',async e=>{e.preventDefault();message('正在检查链接格式……');try{

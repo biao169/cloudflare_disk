@@ -1,3 +1,5 @@
+> **RC14.7 Microsoft OAuth 回调诊断修复：** 若之前出现 `OAUTH_CALLBACK_ERROR / OAUTH_FAILED`，新版会区分微软拒绝、账户类型、授权同意、回调 URI、Session 丢失及 Token 兑换错误。系统设置会显示**准确回调地址**，可选用 `MS_REDIRECT_URI` 固定自定义域名；无需变更 `MS_TOKEN_KEY` 或 D1。请看 [OAuth 回调排错和配置教程](docs/RC14_7_MICROSOFT_OAUTH_CALLBACK_FIX.md)。
+
 > **RC14.7 Microsoft OneDrive 配置热修复：** `MICROSOFT_TOKEN_KEY_MISSING` 现在会明确区分“当前 Worker 运行时未收到 MS_TOKEN_KEY”和“密钥格式不正确”。系统设置 → 站点设置 → Microsoft OneDrive 账户新增三项运行时配置检查和详细教程；修复内容、密钥生成方式及生产/预览绑定排查请看 [Microsoft OAuth 配置排错](docs/RC14_7_MICROSOFT_CONFIG_FIX.md)。升级不需要额外 D1 迁移，原有 `MS_TOKEN_KEY` 不应更换。
 
 > **RC14.1 历史说明（现已升级至 RC14.7）**：当时新增 `/tools/onedrive` 匿名分享链接格式解析工具。管理员在“系统设置”中可关闭工具或匿名访问。此版本**仅校验格式并生成 Graph 分享令牌**，不读取分享内容、不请求微软、不提供下载直链；真正的 Graph/OAuth 文件解析安排在后续阶段。

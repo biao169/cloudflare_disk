@@ -21,3 +21,6 @@ BOOTSTRAP_TOKEN=REPLACE_WITH_A_UNIQUE_RANDOM_SECRET_AT_LEAST_32_CHARACTERS
 # MS_TOKEN_KEY=PASTE_YOUR_64_HEX_RANDOM_KEY_HERE
 # Optional: MS_TENANT=common
 # Do not reuse SHARE_LINK_KEY. Do not commit real values or rotate the key after authorization.
+
+# Optional: pin callback to a single canonical HTTPS domain; initiate OAuth from that exact domain.
+# MS_REDIRECT_URI=https://drive.example.com/api/v1/admin/onedrive/oauth/callback
