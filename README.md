@@ -1,4 +1,6 @@
-> **RC14.1**：已新增 `/tools/onedrive` 匿名分享链接格式解析工具。管理员在“系统设置”中可关闭工具或匿名访问。此版本**仅校验格式并生成 Graph 分享令牌**，不读取分享内容、不请求微软、不提供下载直链；真正的 Graph/OAuth 文件解析安排在后续阶段。
+> **RC14.7 Microsoft OneDrive 配置热修复：** `MICROSOFT_TOKEN_KEY_MISSING` 现在会明确区分“当前 Worker 运行时未收到 MS_TOKEN_KEY”和“密钥格式不正确”。系统设置 → 站点设置 → Microsoft OneDrive 账户新增三项运行时配置检查和详细教程；修复内容、密钥生成方式及生产/预览绑定排查请看 [Microsoft OAuth 配置排错](docs/RC14_7_MICROSOFT_CONFIG_FIX.md)。升级不需要额外 D1 迁移，原有 `MS_TOKEN_KEY` 不应更换。
+
+> **RC14.1 历史说明（现已升级至 RC14.7）**：当时新增 `/tools/onedrive` 匿名分享链接格式解析工具。管理员在“系统设置”中可关闭工具或匿名访问。此版本**仅校验格式并生成 Graph 分享令牌**，不读取分享内容、不请求微软、不提供下载直链；真正的 Graph/OAuth 文件解析安排在后续阶段。
 
 > **RC13.5 运维更新：** 旧 CDN 链接重试退避、历史版本安全保留及清理、版本同步与容量仪表盘。详见 [RC13.5 运维文档](docs/RC13_5_OPERATIONS.md)。生产部署仍使用 `npm run build` / `npm run deploy`。
 

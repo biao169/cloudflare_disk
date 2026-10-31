@@ -1,6 +1,7 @@
 import {driveFileAdminRoute} from '../services/onedrive-drive-files.js';
 import {oneDriveOperationalStatus} from '../services/onedrive-maintenance.js';
 import {startOAuth,finishOAuth,graphResolve,connectionStatus,disconnect} from '../services/onedrive-oauth.js';
+import {microsoftConfigErrorMessage} from '../services/microsoft-config.js';
 import {oneDriveStats} from '../services/onedrive-quota.js';
 import {reconcileLedger,scanR2Bucket} from '../services/reconcile.js';
 import {dbFromEnv,one,many,execute} from '../services/database.js';
@@ -14,10 +15,10 @@ export async function adminRoute(req,env,path){
  const db=dbFromEnv(env),method=req.method;
  if(path.startsWith('/api/v1/admin/onedrive/drive/'))return driveFileAdminRoute(req,env,path);
  if(path==='/api/v1/admin/onedrive/oauth/start'&&req.method==='GET'){
-  try{return ok({authorization_url:await startOAuth(req,env,user.id)});}catch(e){return error('OAUTH_CONFIG_ERROR',e.message,503);}
+  try{return ok({authorization_url:await startOAuth(req,env,user.id)});}catch(e){const detail=microsoftConfigErrorMessage(e.message);return error(detail?e.message:'OAUTH_CONFIG_ERROR',detail||'无法启动 Microsoft 授权，请检查后台配置及 D1 状态',503);}
  }
  if(path==='/api/v1/admin/onedrive/oauth/callback'&&req.method==='GET'){
-  try{await finishOAuth(req,env,user.id);return new Response(null,{status:302,headers:{Location:'/tools/onedrive?connected=1','Cache-Control':'no-store'}});}catch(e){return error('OAUTH_CALLBACK_ERROR',e.message,400);}
+  try{await finishOAuth(req,env,user.id);return new Response(null,{status:302,headers:{Location:'/tools/onedrive?connected=1','Cache-Control':'no-store'}});}catch(e){return error('OAUTH_CALLBACK_ERROR',microsoftConfigErrorMessage(e.message)||e.message,400);}
  }
  if(path==='/api/v1/admin/onedrive/oauth'&&req.method==='GET')return ok(await connectionStatus(env));
  if(path==='/api/v1/admin/onedrive/oauth'&&req.method==='DELETE'){await disconnect(env);return ok({connected:false});}

@@ -7,7 +7,7 @@ This milestone adds an **administrator-only** Microsoft OAuth connection and a G
 1. Open Microsoft Entra admin center > App registrations and create an app supporting personal Microsoft accounts (or both organizational and personal accounts).
 2. Register a **Web** redirect URI exactly `https://YOUR_CLOUDDRIVE_HOST/api/v1/admin/onedrive/oauth/callback`.
 3. Add delegated Microsoft Graph permission `Files.ReadWrite` (required for the Graph Shares endpoint) and `User.Read`. Requesting `offline_access` obtains a refresh token. Review permissions and tenant consent carefully.
-4. Set Worker vars `MS_CLIENT_ID` (application/client ID) and optionally `MS_TENANT` (defaults to `common`). Set secret `MS_CLIENT_SECRET` for confidential web app token exchange, and `MS_TOKEN_KEY` as **64 random hexadecimal characters**; keep a backup in a secure secret vault.
+4. Set Worker vars `MS_CLIENT_ID` (application/client ID) and optionally `MS_TENANT` (defaults to `common`). Set secret `MS_CLIENT_SECRET` for confidential web app token exchange, and `MS_TOKEN_KEY` as **32 random bytes (64 hexadecimal characters recommended, or 32-byte Base64)**; keep a backup in a secure secret vault. See [config diagnosis](RC14_7_MICROSOFT_CONFIG_FIX.md) for runtime binding checks and distinct error codes.
 5. Apply migration `0025_rc14_4_onedrive_oauth.sql` before deployment.
 6. Log into CloudDrive as super administrator; open `/tools/onedrive`, connect Microsoft and authorize. Resolve the source URL from the same administrator-only panel.
 

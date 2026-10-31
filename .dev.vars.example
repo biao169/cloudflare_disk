@@ -10,3 +10,14 @@ BOOTSTRAP_TOKEN=REPLACE_WITH_A_UNIQUE_RANDOM_SECRET_AT_LEAST_32_CHARACTERS
 # Do not put the following optional runtime CDN secrets in Git:
 # CDN_ZONE_ID=your_zone_id
 # CDN_PURGE_TOKEN=restricted_zone_cache_purge_token
+
+# RC14.7 Microsoft OneDrive admin OAuth (runtime secrets in the SAME Worker):
+# Obtain MS_CLIENT_ID from Microsoft Entra > App registrations > Overview > Application (client) ID.
+# MS_CLIENT_ID=12345678-abcd-1234-abcd-123456789abc
+# Obtain the client secret VALUE (not Secret ID) from Certificates & secrets.
+# MS_CLIENT_SECRET=PASTE_THE_MICROSOFT_CLIENT_SECRET_VALUE
+# Generate MS_TOKEN_KEY yourself; it is NOT a Microsoft credential.
+# Exactly 64 hexadecimal characters (32 random bytes) recommended. 32-byte Base64 also works.
+# MS_TOKEN_KEY=PASTE_YOUR_64_HEX_RANDOM_KEY_HERE
+# Optional: MS_TENANT=common
+# Do not reuse SHARE_LINK_KEY. Do not commit real values or rotate the key after authorization.
