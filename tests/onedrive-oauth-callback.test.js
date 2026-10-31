@@ -51,7 +51,8 @@ test('Callback failure redirects browser to useful error UI without state/code/d
  const r=oauthCallbackRedirect({code:'MICROSOFT_ACCOUNT_TYPE_MISMATCH',aadsts:'AADSTS50020',microsoftError:'invalid_request'});
  assert.equal(r.status,303);
  const url=new URL(r.headers.get('Location'),'https://drive.example.org');
- assert.equal(url.pathname,'/tools/onedrive');
+ assert.equal(url.pathname,'/settings');
+ assert.equal(url.searchParams.get('tab'),'onedrive');
  assert.equal(url.searchParams.get('oauth_error'),'MICROSOFT_ACCOUNT_TYPE_MISMATCH');
  assert.equal(url.searchParams.get('aadsts'),'AADSTS50020');
  assert.equal(url.searchParams.get('ms_error'),'invalid_request');

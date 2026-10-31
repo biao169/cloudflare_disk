@@ -14,10 +14,10 @@ import {settings,metrics,validateSettings,audit} from '../services/admin.js';
 import {operationsSummary,buildQuotaAlerts,runMaintenance} from '../services/operations.js';
 // Return only sanitized error identifiers in the URL; never forward code, state, tokens, or raw descriptions.
 export function oauthCallbackRedirect({code,aadsts,microsoftError}={}){
- const p=new URLSearchParams({oauth_error:/^[A-Z_]{4,75}$/.test(code||'')?code:'OAUTH_CALLBACK_ERROR'});
+ const p=new URLSearchParams({tab:'onedrive',oauth_error:/^[A-Z_]{4,75}$/.test(code||'')?code:'OAUTH_CALLBACK_ERROR'});
  if(/^AADSTS\d{4,8}$/.test(aadsts||''))p.set('aadsts',aadsts);
  if(/^[a-z_]{1,50}$/.test(microsoftError||''))p.set('ms_error',microsoftError);
- return new Response(null,{status:303,headers:{Location:'/tools/onedrive?'+p.toString(),'Cache-Control':'no-store','Referrer-Policy':'no-referrer'}});
+ return new Response(null,{status:303,headers:{Location:'/settings?'+p.toString(),'Cache-Control':'no-store','Referrer-Policy':'no-referrer'}});
 }
 export async function adminRoute(req,env,path){
  const user=await resolveUser(req,env);
@@ -33,7 +33,7 @@ export async function adminRoute(req,env,path){
   try{return ok({authorization_url:await startOAuth(req,env,user.id)});}catch(e){const detail=microsoftConfigErrorMessage(e.message);const diagnostic=oauthErrorDetails(e);return error(detail?e.message:diagnostic.code,detail||diagnostic.message,503);}
  }
  if(path==='/api/v1/admin/onedrive/oauth/callback'&&req.method==='GET'){
-  try{await finishOAuth(req,env,user.id);return new Response(null,{status:303,headers:{Location:'/tools/onedrive?connected=1','Cache-Control':'no-store'}});}catch(e){return oauthCallbackRedirect(oauthErrorDetails(e));}
+  try{await finishOAuth(req,env,user.id);return new Response(null,{status:303,headers:{Location:'/settings?tab=onedrive&connected=1','Cache-Control':'no-store'}});}catch(e){return oauthCallbackRedirect(oauthErrorDetails(e));}
  }
  if(path==='/api/v1/admin/onedrive/oauth'&&req.method==='GET')return ok(await connectionStatus(env,req));
  if(path==='/api/v1/admin/onedrive/oauth'&&req.method==='DELETE'){await disconnect(env);return ok({connected:false});}

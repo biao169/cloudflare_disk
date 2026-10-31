@@ -23,7 +23,7 @@ function render() {
  if(key==='personal'||key==='spaces')renderSpaces(host,key==='personal');else if(['files','recent','favorites'].includes(key))renderFileManager(host,key);else if(key==='search')renderGlobalSearch(host);else if(key==='users')renderUsers(host);else if(key==='shares')renderShares(host);else if(key==='trash')renderTrash(host);else if(key==='settings')renderAdmin(host);else if(key==='onedrive')void renderOneDriveBrowser(host);else renderPlaceholder(host,key);
  closeMenu();
 }
-document.addEventListener('click',e=>{const a=e.target.closest('a[data-route]');if(!a || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey)return;e.preventDefault();const target=new URL(a.href,location.href);if(target.origin!==location.origin)return;history.pushState({},'',target.pathname);render();});
+document.addEventListener('click',e=>{const a=e.target.closest('a[data-route]');if(!a || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey)return;e.preventDefault();const target=new URL(a.href,location.href);if(target.origin!==location.origin)return;history.pushState({},'',target.pathname+target.search);render();});
 window.addEventListener('popstate',render);
 window.addEventListener('clouddrive:locate',event=>{
  const {spaceId,folderId}=event.detail||{};

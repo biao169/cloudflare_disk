@@ -12,7 +12,29 @@ function progressBar(label,used,max,threshold=85){const box=node('div','mb-3'),h
  const frame=node('div','progress');frame.style.height='8px';const bar=node('div',`progress-bar ${percent(used,max)>=100?'bg-danger':percent(used,max)>=threshold?'bg-warning':'bg-primary'}`);bar.style.width=`${Math.min(100,percent(used,max))}%`;bar.setAttribute('role','progressbar');bar.setAttribute('aria-valuenow',String(Math.min(100,percent(used,max))));bar.setAttribute('aria-valuemin','0');bar.setAttribute('aria-valuemax','100');frame.append(bar);box.append(frame);return box;}
 function formField(form,key,label,value,type='text',min=null,max=null){const wrap=node('label','d-block mb-3'),caption=node('span','form-label d-block',label),input=node('input','form-control');input.name=key;input.type=type;input.value=value;input.required=true;if(min!==null)input.min=String(min);if(max!==null)input.max=String(max);wrap.append(caption,input);form.append(wrap);return input;}
 function panel(title){const container=node('section','card border-0 shadow-sm mb-3'),body=node('div','card-body');body.append(node('h2','h5 mb-3',title));container.append(body);return {container,body};}
-function sectionSet(parent,titles){const nav=node('div','nav nav-pills gap-2 mb-3'),slots=new Map();parent.append(nav);for(const [key,label] of titles){const button=btn(label,'btn btn-sm btn-outline-secondary'),slot=node('section');button.onclick=()=>{for(const [k,v] of slots){v.area.hidden=k!==key;v.button.className=k===key?'btn btn-sm btn-primary':'btn btn-sm btn-outline-secondary';}};nav.append(button);parent.append(slot);slots.set(key,{button,area:slot});}slots.get(titles[0][0]).button.click();return Object.fromEntries([...slots].map(([k,v])=>[k,v.area]));}
+function sectionSet(parent,titles,initial=titles[0][0]){
+ const nav=node('div','nav nav-pills gap-2 mb-3 flex-wrap');nav.setAttribute('role','tablist');
+ const slots=new Map();let initializing=true;parent.append(nav);
+ for(const [key,label] of titles){
+  const button=btn(label,'btn btn-sm btn-outline-secondary'),slot=node('section');
+  button.setAttribute('role','tab');slot.setAttribute('role','tabpanel');slot.setAttribute('aria-label',label);
+  button.onclick=()=>{
+   for(const [k,v] of slots){
+    v.area.hidden=k!==key;
+    v.button.className=k===key?'btn btn-sm btn-primary':'btn btn-sm btn-outline-secondary';
+    v.button.setAttribute('aria-selected',String(k===key));
+   }
+   if(!initializing&&location.pathname==='/settings'){
+    const url=new URL(location.href);url.searchParams.set('tab',key);
+    for(const q of ['oauth_error','aadsts','ms_error','connected'])url.searchParams.delete(q);
+    history.replaceState(history.state,'',url.pathname+url.search);
+   }
+  };
+  nav.append(button);parent.append(slot);slots.set(key,{button,area:slot});
+ }
+ slots.get(slots.has(initial)?initial:titles[0][0]).button.click();initializing=false;
+ return Object.fromEntries([...slots].map(([k,v])=>[k,v.area]));
+}
 function message(target,value,kind='info'){target.replaceChildren(node('div',`alert alert-${kind} small`,value));}
 function errorText(e){return String(e?.message||'操作失败');}
 function lineTable(headers){const wrap=node('div','table-responsive'),table=node('table','table table-sm align-middle'),thead=node('thead'),tr=node('tr'),tbody=node('tbody');for(const h of headers)tr.append(node('th','',h));thead.append(tr);table.append(thead,tbody);wrap.append(table);return {wrap,tbody};}
@@ -48,15 +70,64 @@ async function addBackupTab(target){const p=panel('备份与隔离恢复');targe
  const form=node('form','border rounded p-3');form.append(node('h3','h6','登记已经完成的备份（不执行备份）'));
  const type=node('select','form-select mb-2');type.name='backup_type';for(const [key,label] of [['d1_and_r2','完整：D1 SQL + 两个 R2 桶'],['d1_only','仅 D1 SQL']]){const option=node('option','',label);option.value=key;type.append(option)}form.append(type);formField(form,'destination_label','备份位置说明（勿填写账号密码）','','text');formField(form,'notes','备注（可选）','','text');const save=node('button','btn btn-primary btn-sm','登记备份');save.type='submit';form.append(save);form.onsubmit=async ev=>{ev.preventDefault();save.disabled=true;try{await requestJSON('/api/v1/admin/backups/records',{method:'POST',body:{backup_type:type.value,destination_label:form.elements.namedItem('destination_label').value,notes:form.elements.namedItem('notes').value}});form.reset();await load();}catch(e){alert(errorText(e));}finally{save.disabled=false}};p.body.append(form);await load();}
 function addSettingsTab(target,dash,host){const p=panel('系统设置');target.append(p.container);const s=dash.settings,form=node('form');p.body.append(form);
- const values=[['site_name','站点名称',s.site_name,'text'],['max_storage_mib','应用全局配额（MiB）',Math.round(s.max_storage_bytes/MiB),'number'],['quota_warn_percent','容量预警阈值（%）',s.quota_warn_percent,'number'],['default_share_days','默认分享有效天数',s.default_share_days,'number'],['trash_retention_days','回收站保留天数',s.trash_retention_days,'number'],['backup_reminder_days','备份提醒间隔（天）',s.backup_reminder_days,'number'],['incident_retention_days','异常日志保留天数',s.incident_retention_days,'number'],['onedrive_guest_minute_limit','游客每分钟解析上限',s.onedrive_guest_minute_limit,'number'],['onedrive_guest_hour_limit','游客每小时解析上限',s.onedrive_guest_hour_limit,'number'],['onedrive_guest_day_limit','游客每日解析上限',s.onedrive_guest_day_limit,'number'],['onedrive_user_minute_limit','登录用户每分钟解析上限',s.onedrive_user_minute_limit,'number'],['onedrive_user_hour_limit','登录用户每小时解析上限',s.onedrive_user_hour_limit,'number'],['onedrive_user_day_limit','登录用户每日解析上限',s.onedrive_user_day_limit,'number']];
+ const values=[['site_name','站点名称',s.site_name,'text'],['max_storage_mib','应用全局配额（MiB）',Math.round(s.max_storage_bytes/MiB),'number'],['quota_warn_percent','容量预警阈值（%）',s.quota_warn_percent,'number'],['default_share_days','默认分享有效天数',s.default_share_days,'number'],['trash_retention_days','回收站保留天数',s.trash_retention_days,'number'],['backup_reminder_days','备份提醒间隔（天）',s.backup_reminder_days,'number'],['incident_retention_days','异常日志保留天数',s.incident_retention_days,'number']];
  for(const [key,label,value,type] of values)formField(form,key,label,value,type);
- for(const [key,label,value] of [['uploads_enabled','允许上传',s.uploads_enabled],['public_shares_enabled','允许新分享',s.public_shares_enabled],['maintenance_paused','暂停自动清理（不建议长期启用）',s.maintenance_paused],['onedrive_tool_enabled','启用 OneDrive 链接解析工具',s.onedrive_tool_enabled],['onedrive_anonymous_enabled','允许游客匿名解析 OneDrive 分享链接',s.onedrive_anonymous_enabled]]){
+ for(const [key,label,value] of [['uploads_enabled','允许上传',s.uploads_enabled],['public_shares_enabled','允许新分享',s.public_shares_enabled],['maintenance_paused','暂停自动清理（不建议长期启用）',s.maintenance_paused]]){
   const wrap=node('label','form-check mb-3'),input=node('input','form-check-input');input.name=key;input.type='checkbox';input.checked=value;wrap.append(input,node('span','form-check-label ms-2',label));form.append(wrap);
  }
  const save=node('button','btn btn-primary','保存设置');save.type='submit';form.append(save);const response=node('div','mt-2');form.append(response);
  form.onsubmit=async ev=>{ev.preventDefault();const body={};for(const [key,,,type] of values){const raw=form.elements.namedItem(key).value;body[key]=type==='number'?Number(raw):raw}body.max_storage_bytes=Math.round(body.max_storage_mib*MiB);delete body.max_storage_mib;
- for(const key of ['uploads_enabled','public_shares_enabled','maintenance_paused','onedrive_tool_enabled','onedrive_anonymous_enabled'])body[key]=form.elements.namedItem(key).checked;
+ for(const key of ['uploads_enabled','public_shares_enabled','maintenance_paused'])body[key]=form.elements.namedItem(key).checked;
  save.disabled=true;try{await requestJSON('/api/v1/admin/settings',{method:'PATCH',body});message(response,'已保存设置','success');}catch(e){message(response,errorText(e),'danger');}finally{save.disabled=false}};
+}
+function addOneDriveToolSettings(target,dash){
+ const s=dash.settings,p=panel('OneDrive 解析工具 · 访问权限与配额');target.append(p.container);
+ p.body.append(node('p','small text-secondary','此处控制 /tools/onedrive 公开解析工具。Microsoft 应用注册、OAuth Secret、账号连接与文件同步设置位于本页下方；只有超级管理员可以修改。'));
+ const form=node('form');p.body.append(form);
+ for(const [key,label,description] of [
+  ['onedrive_tool_enabled','启用 OneDrive 分享链接解析工具','关闭后所有用户都不能提交新的解析请求；不会自动撤销已经发布的固定链接。'],
+  ['onedrive_anonymous_enabled','允许匿名游客解析公开分享链接','开启后游客仅能看到链接输入与格式解析区域；固定链接管理、Microsoft 授权和下载探测按钮只对登录用户显示。关闭后游客无法提交解析。']
+ ]){
+  const wrap=node('label','form-check mb-3'),input=node('input','form-check-input');input.name=key;input.type='checkbox';input.checked=Boolean(s[key]);
+  wrap.append(input,node('span','form-check-label ms-2 fw-semibold',label));form.append(wrap,node('p','small text-secondary ms-4 mb-3',description));
+ }
+ const limits=[
+  ['onedrive_guest_minute_limit','游客每分钟解析上限','建议 3 次，避免匿名高频请求。'],
+  ['onedrive_guest_hour_limit','游客每小时解析上限','建议 10 次，限制异常流量。'],
+  ['onedrive_guest_day_limit','游客每日解析上限','建议 50 次，UTC 固定时间窗口。'],
+  ['onedrive_user_minute_limit','登录用户每分钟解析上限','建议 10 次。'],
+  ['onedrive_user_hour_limit','登录用户每小时解析上限','建议 60 次。'],
+  ['onedrive_user_day_limit','登录用户每日解析上限','建议 300 次，UTC 固定时间窗口。']
+ ];
+ const grid=node('div','row g-2 mb-2');form.append(grid);
+ for(const [key,label,description] of limits){
+  const col=node('div','col-12 col-md-6'),input=formField(col,key,label,s[key],'number',1,10000);
+  input.step='1';col.append(node('p','small text-secondary mt-n2',description));grid.append(col);
+ }
+ const save=node('button','btn btn-primary','保存 OneDrive 解析设置');save.type='submit';const response=node('div','mt-2');form.append(save,response);
+ form.onsubmit=async ev=>{
+  ev.preventDefault();const changes={
+   onedrive_tool_enabled:form.elements.namedItem('onedrive_tool_enabled').checked,
+   onedrive_anonymous_enabled:form.elements.namedItem('onedrive_anonymous_enabled').checked
+  };
+  for(const [key] of limits){const input=form.elements.namedItem(key),value=Number(input.value);if(!Number.isSafeInteger(value)||value<1||value>10000){message(response,'解析次数必须是 1–10000 的整数','danger');input.focus();return;}changes[key]=value;}
+  save.disabled=true;
+  try{await requestJSON('/api/v1/admin/settings',{method:'PATCH',body:changes});message(response,'OneDrive 解析权限与配额已保存','success');}
+  catch(e){message(response,errorText(e),'danger');}finally{save.disabled=false;}
+ };
+}
+async function addOneDriveStatsTab(target){
+ const p=panel('OneDrive 解析配额统计（当前窗口）');target.append(p.container);
+ const load=async()=>{
+  const existing=p.body.querySelector('.od-stats-data');existing?.remove();
+  const output=node('div','od-stats-data');p.body.append(output);
+  try{const result=await requestJSON('/api/v1/admin/onedrive/stats');const table=lineTable(['窗口','解析请求数','活跃标识数']);output.append(table.wrap);
+   for(const item of result.windows||[]){const tr=node('tr');tr.append(node('td','',item.window_name),node('td','',String(item.hits)),node('td','',String(item.subjects)));table.tbody.append(tr);}
+   if(!result.windows?.length)output.append(node('p','small text-secondary','当前没有统计数据。'));
+  }catch(e){message(output,errorText(e),'warning');}
+ };
+ const refresh=btn('刷新统计','btn btn-outline-secondary btn-sm mb-3');refresh.onclick=()=>void load();p.body.append(refresh);
+ await load();
 }
 export async function renderAdmin(host){host.replaceChildren(node('h1','h3 mb-3','生产运维与系统管理'));const area=node('div');host.append(area);
  try{const [dash,health]=await Promise.all([requestJSON('/api/v1/admin/dashboard'),requestJSON('/api/v1/admin/health')]);const {usage,settings:s,operations:o,alerts}=dash;
@@ -66,11 +137,13 @@ export async function renderAdmin(host){host.replaceChildren(node('h1','h3 mb-3'
   status.body.append(progressBar('全局容量使用率（含预留）',Number(usage.totals.used_bytes)+Number(usage.totals.reserved_bytes),s.max_storage_bytes,s.quota_warn_percent));
   status.body.append(node('p','small text-secondary',`D1 ${health.database?'可用':'不可用'} · 私有 R2 ${health.r2_private?'已绑定':'缺失'} · 公开 R2 ${health.r2_public?'已绑定':'缺失'} · 最近清理 ${o.latest_maintenance?.status||'暂无记录'} · 备份登记 ${o.last_backup_record?.created_at||'暂无记录'}`));
   const warnings=node('div','mb-2');for(const alert of alerts){warnings.append(node('div',`alert alert-${alert.severity==='critical'?'danger':alert.severity==='warning'?'warning':'secondary'} py-2 small`,alert.message));}if(!alerts.length)warnings.append(node('p','text-secondary small','目前没有应用级预警。'));status.body.append(warnings);
-  const slots=sectionSet(area,[['quota','容量与核对'],['maintenance','自动清理'],['incidents','异常日志'],['backups','备份与恢复'],['settings','站点设置']]);
+  const selectedTab=new URLSearchParams(location.search).get('tab')||'quota';
+  const slots=sectionSet(area,[['quota','容量与核对'],['maintenance','自动清理'],['incidents','异常日志'],['backups','备份与恢复'],['settings','站点设置'],['onedrive','OneDrive 配置']],selectedTab);
   addQuotaTab(slots.quota,dash,host);
   await Promise.all([addMaintenanceTab(slots.maintenance),addIncidentsTab(slots.incidents),addBackupTab(slots.backups)]);
   addSettingsTab(slots.settings,dash,host);
-  await addOneDriveSettings(slots.settings);
-  const od=panel('OneDrive 解析配额统计（当前窗口）');slots.settings.append(od.container);requestJSON('/api/v1/admin/onedrive/stats').then(result=>{const table=lineTable(['窗口','解析请求数','活跃标识数']);od.body.append(table.wrap);for(const item of result.windows||[]){const tr=node('tr');tr.append(node('td','',item.window_name),node('td','',String(item.hits)),node('td','',String(item.subjects)));table.tbody.append(tr)}}).catch(e=>message(od.body,errorText(e),'warning')); 
+  addOneDriveToolSettings(slots.onedrive,dash);
+  await addOneDriveSettings(slots.onedrive);
+  await addOneDriveStatsTab(slots.onedrive);
  }catch(e){area.replaceChildren(node('div','alert alert-danger',errorText(e)));}
 }

@@ -1,5 +1,5 @@
 import {dbFromEnv,one,many,execute} from './database.js';
-import {getAccessToken,validMicrosoftDownloadUrl} from './onedrive-oauth.js';
+import {getAccessToken,validMicrosoftDownloadUrl,microsoftDownloadTargetHost} from './onedrive-oauth.js';
 import {ok,error,json} from '../utils/response.js';
 import {resolveUser} from './auth.js';
 import {browseDrivePage,driveThumbnail,validateBrowseParams} from './onedrive-browser.js';
@@ -14,9 +14,9 @@ const esc=s=>encodeURIComponent(s);
 // The browser only sees a stable CloudDrive /r/odf_* link. Graph credentials stay server-side.
 // Upstream error codes are deliberately bounded: never echo token, private URL, Graph body or headers.
 export class OneDriveDeliveryError extends Error {
- constructor(code, {status=502, upstreamStatus=null, retryAfter=null}={}) {
+ constructor(code, {status=502, upstreamStatus=null, retryAfter=null, blockedHost=null}={}) {
   super(code);this.name='OneDriveDeliveryError';this.code=code;this.status=status;
-  this.upstreamStatus=upstreamStatus;this.retryAfter=retryAfter;
+  this.upstreamStatus=upstreamStatus;this.retryAfter=retryAfter;this.blockedHost=blockedHost;
  }
 }
 const retrySeconds=value=>{
@@ -82,7 +82,7 @@ export async function streamGraphDownload(env,row){
  const response=await graphContentResponse(env,row);
  if([301,302,303,307,308].includes(response.status)){
   const loc=response.headers.get('Location');
-  if(!validMicrosoftDownloadUrl(loc))throw new OneDriveDeliveryError('MICROSOFT_DOWNLOAD_REDIRECT_UNTRUSTED');
+  if(!validMicrosoftDownloadUrl(loc))throw new OneDriveDeliveryError('MICROSOFT_DOWNLOAD_REDIRECT_UNTRUSTED',{blockedHost:microsoftDownloadTargetHost(loc)});
   return {location:loc};
  }
  if(![200,206].includes(response.status))throw upstreamError(response);
@@ -194,5 +194,5 @@ export async function diagnoseDriveDownload(env,id){
   const result=await streamGraphDownload(env,row);
   if(result.response?.body)await result.response.body.cancel().catch(()=>{});
   return {available:true,method:result.location?'content_redirect':'content_stream',code:'OK',note:'已验证微软下载接口响应，尚未实际传完整文件。'};
- }catch(e){const safe=deliveryException(e);return {available:false,code:safe.code,upstream_status:safe.upstreamStatus,message:downloadErrorDescription(safe.code),retry_after_seconds:safe.retryAfter||null};}
+ }catch(e){const safe=deliveryException(e);return {available:false,code:safe.code,upstream_status:safe.upstreamStatus,message:downloadErrorDescription(safe.code),retry_after_seconds:safe.retryAfter||null,blocked_download_host:safe.blockedHost||null};}
 }

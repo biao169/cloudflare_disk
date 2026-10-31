@@ -1,55 +1,137 @@
-import {addMicrosoftOauthNotice} from './utils/microsoft-oauth-feedback.js';
-const form=document.getElementById('od-form'),out=document.getElementById('od-result');
-addMicrosoftOauthNotice(document.querySelector('main'));
-if(new URLSearchParams(location.search).get('connected')==='1'){
- const banner=document.createElement('div');banner.className='alert alert-success small mb-3';banner.textContent='Microsoft 账户已完成授权，可以返回系统设置浏览并发布文件。';document.querySelector('main')?.prepend(banner);
+// The public OneDrive tool must never render account or link-management controls
+// until the Worker confirms an authenticated CloudDrive session. Anonymous
+// visitors see only the link format parser when the admin allows guest access.
+const form=document.getElementById('od-form');
+const out=document.getElementById('od-result');
+const submit=form.querySelector('button[type="submit"]');
+const main=document.querySelector('main');
+submit.disabled=true;
+let enabled=false;
+let authenticated=false;
+let extraControls=null;
+
+function message(text,kind='secondary'){
+ out.replaceChildren();
+ const p=document.createElement('div');p.className=`alert alert-${kind}`;p.textContent=text;out.append(p);
 }
-function message(text,kind='secondary'){out.replaceChildren();const p=document.createElement('div');p.className=`alert alert-${kind}`;p.textContent=text;out.appendChild(p);}
-async function checkStatus(){try{const r=await fetch('/api/v1/tools/onedrive/status',{credentials:'same-origin'}),data=await r.json();if(!data.success){message(data.error?.message||'工具当前不可用','warning');form.querySelector('button').disabled=true;}}catch{message('无法读取工具状态','warning');}}
-form.addEventListener('submit',async e=>{e.preventDefault();message('正在检查链接格式……');try{
- const r=await fetch('/api/v1/tools/onedrive/resolve',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify({url:document.getElementById('od-url').value.trim()})});const result=await r.json();if(!result.success)return message(result.error?.message||'解析失败','warning');
- const data=result.data;message(`格式有效：${data.link_kind}。${data.message}`,'success');
- const code=document.createElement('textarea');code.className='form-control mt-2';code.rows=3;code.readOnly=true;code.value=data.share_token;code.setAttribute('aria-label','Graph 分享令牌');out.appendChild(code);
- const copy=document.createElement('button');copy.className='btn btn-outline-secondary btn-sm mt-2';copy.textContent='复制 Graph 分享令牌';copy.addEventListener('click',()=>navigator.clipboard?.writeText(data.share_token));out.appendChild(copy);
- }catch{message('网络异常，请稍后重试','danger');}});
-checkStatus();
-
-// RC14.3: logged-in users may manage stable source-page links. These links are
-// deliberately NOT advertised as direct file downloads until Graph is integrated.
-const linkPanel=document.createElement('section');linkPanel.className='card p-3 mt-4';
-linkPanel.innerHTML='<h2 class="h5">固定入口管理（登录用户）</h2><p class="small text-secondary">固定入口默认打开原分享页；可为自己的链接启用公开直链尝试。若微软不允许免登录下载，自动回退分享页。</p>';
-const createButton=document.createElement('button');createButton.className='btn btn-outline-primary btn-sm';createButton.textContent='为当前链接创建固定入口';
-const linkList=document.createElement('div');linkList.className='mt-3';
-linkPanel.append(createButton,linkList);document.querySelector('main')?.append(linkPanel);
-async function loadLinks(){
- try{const r=await fetch('/api/v1/tools/onedrive/links',{credentials:'same-origin'});if(r.status===401){linkPanel.hidden=true;return;}
- const j=await r.json();if(!j.success)return;linkList.replaceChildren();
- for(const item of j.data.links){const el=document.createElement('div');el.className='border-top py-2';const a=document.createElement('a');a.href=item.url;a.textContent=`${location.origin}${item.url}`;a.rel='noopener noreferrer';a.target='_blank';el.append(a,document.createTextNode(` (${item.status}; ${item.access_count} 次访问) `));
- if(item.status==='active'){const mode=document.createElement('button');mode.className='btn btn-outline-secondary btn-sm ms-2';mode.textContent=item.delivery==='public_direct'?'关闭直链尝试':'尝试公开直链';mode.onclick=async()=>{const r=await fetch('/api/v1/tools/onedrive/links/'+item.id,{method:'PATCH',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({delivery_mode:item.delivery==='public_direct'?'source_page_redirect':'public_direct'})});const j=await r.json();if(!j.success)message(j.error?.message||'更新失败','warning');await loadLinks();};el.append(mode);const b=document.createElement('button');b.className='btn btn-outline-danger btn-sm ms-2';b.textContent='撤销';b.onclick=async()=>{if(!confirm('撤销此固定入口？'))return;await fetch('/api/v1/tools/onedrive/links/'+item.id,{method:'DELETE',credentials:'same-origin'});await loadLinks();};el.append(b);}linkList.append(el);}
- }catch{linkList.textContent='固定入口列表加载失败';}
+async function json(url,init={}){
+ const response=await fetch(url,{credentials:'same-origin',cache:'no-store',...init});
+ const data=await response.json();
+ return {response,data};
 }
-createButton.onclick=async()=>{const url=document.getElementById('od-url').value.trim();if(!url)return message('请先填写分享链接','warning');
- try{const r=await fetch('/api/v1/tools/onedrive/links',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify({url})});const j=await r.json();if(!j.success)return message(j.error?.message||'创建失败','warning');message(j.data.message,'success');await loadLinks();}
- catch{message('网络异常','danger');}};
-loadLinks();
+function addButton(parent,label,action,style='btn btn-outline-secondary btn-sm'){
+ const b=document.createElement('button');b.type='button';b.className=style;b.textContent=label;b.addEventListener('click',action);parent.append(b);return b;
+}
+function hideLoggedInControls(){
+ extraControls?.remove();extraControls=null;authenticated=false;
+}
+function getUrl(){return document.getElementById('od-url').value.trim();}
 
-const checkPublic=document.createElement('button');checkPublic.className='btn btn-outline-secondary btn-sm mt-2';checkPublic.textContent='验证公开文件直链（无需微软登录）';checkPublic.onclick=async()=>{const url=document.getElementById('od-url').value.trim();if(!url)return message('请先填写分享链接','warning');checkPublic.disabled=true;try{const r=await fetch('/api/v1/tools/onedrive/public-check',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify({url})});const j=await r.json();if(!j.success)return message(j.error?.message||'检查失败','warning');message(j.data.anonymous_direct_verified?'已取得无需微软登录的短期有效直链（可生成固定入口并开启直链尝试）。':'未能确认公开下载能力：'+j.data.reason+'。仍可使用原分享页入口。',j.data.anonymous_direct_verified?'success':'warning');if(j.data.anonymous_direct_verified){const a=document.createElement('a');a.href=j.data.download_url;a.target='_blank';a.rel='noopener noreferrer';a.textContent='打开刚解析的临时下载直链';out.append(a);}}catch{message('公开直链探测请求失败','danger');}finally{checkPublic.disabled=false;}};form.after(checkPublic);
+form.addEventListener('submit',async event=>{
+ event.preventDefault();
+ if(!enabled||submit.disabled)return;
+ submit.disabled=true;message('正在检查链接格式……');
+ try{
+  const {data}=await json('/api/v1/tools/onedrive/resolve',{
+   method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:getUrl()})
+  });
+  if(!data.success)return message(data.error?.message||'解析失败','warning');
+  message(`格式有效：${data.data.link_kind}。${data.data.message}`,'success');
+  const code=document.createElement('textarea');code.className='form-control mt-2';code.rows=3;code.readOnly=true;
+  code.value=data.data.share_token;code.setAttribute('aria-label','Graph 分享令牌');out.append(code);
+  addButton(out,'复制 Graph 分享令牌',()=>navigator.clipboard?.writeText(data.data.share_token),'btn btn-outline-secondary btn-sm mt-2');
+ }catch{message('网络异常，请稍后重试','danger');}
+ finally{submit.disabled=!enabled;}
+});
 
-// RC14.4: Admin-only Microsoft connection panel (the backend checks admin role).
-(async()=>{
- const root=document.querySelector('main');if(!root)return;
- const res=await fetch('/api/v1/admin/onedrive/oauth',{credentials:'same-origin'}).catch(()=>null);
- if(!res?.ok)return;
- const state=await res.json();if(!state.success)return;
+async function loadLinks(list,wrap){
+ try{
+  const {response,data}=await json('/api/v1/tools/onedrive/links');
+  if(response.status===401){hideLoggedInControls();message('登录状态已过期，请重新登录后管理固定链接。','warning');return;}
+  if(!data.success){list.textContent=data.error?.message||'固定链接加载失败';return;}
+  list.replaceChildren();
+  for(const item of data.data.links||[]){
+   const row=document.createElement('div');row.className='border-top py-2';
+   const a=document.createElement('a');a.href=item.url;a.textContent=`${location.origin}${item.url}`;
+   a.rel='noopener noreferrer';a.target='_blank';row.append(a,document.createTextNode(` (${item.status}; ${item.access_count} 次访问) `));
+   if(item.status==='active'){
+    addButton(row,item.delivery==='public_direct'?'关闭直链尝试':'尝试公开直链',async()=>{
+     const {response,data}=await json('/api/v1/tools/onedrive/links/'+item.id,{
+      method:'PATCH',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({delivery_mode:item.delivery==='public_direct'?'source_page_redirect':'public_direct'})
+     });
+     if(response.status===401){hideLoggedInControls();return;}
+     if(!data.success)message(data.error?.message||'更新失败','warning');
+     await loadLinks(list,wrap);
+    },'btn btn-outline-secondary btn-sm ms-2');
+    addButton(row,'撤销',async()=>{
+     if(!confirm('撤销此固定入口？'))return;
+     const {response,data}=await json('/api/v1/tools/onedrive/links/'+item.id,{method:'DELETE'});
+     if(response.status===401){hideLoggedInControls();return;}
+     if(!data.success)message(data.error?.message||'撤销失败','warning');
+     await loadLinks(list,wrap);
+    },'btn btn-outline-danger btn-sm ms-2');
+   }
+   list.append(row);
+  }
+ }catch{list.textContent='固定入口列表加载失败';}
+}
+function mountLoggedInControls(){
+ if(extraControls)return;
+ const root=document.createElement('section');root.id='onedrive-authenticated-controls';
+ // No public-probe or fixed-link buttons are appended before the status API
+ // confirms authenticated === true.
+ const checkPublic=addButton(root,'验证公开文件直链（无需微软登录）',async()=>{
+  const url=getUrl();if(!url)return message('请先填写分享链接','warning');
+  checkPublic.disabled=true;
+  try{
+   const {response,data}=await json('/api/v1/tools/onedrive/public-check',{
+    method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url})
+   });
+   if(response.status===401){hideLoggedInControls();return;}
+   if(!data.success)return message(data.error?.message||'检查失败','warning');
+   const result=data.data;
+   message(result.anonymous_direct_verified?'已取得无需微软登录的短期有效直链。':'未能确认公开下载能力：'+result.reason+'。仍可使用原分享页入口。',result.anonymous_direct_verified?'success':'warning');
+   if(result.anonymous_direct_verified&&result.download_url){
+    const a=document.createElement('a');a.href=result.download_url;a.target='_blank';a.rel='noopener noreferrer';a.textContent='打开当前临时下载直链';out.append(a);
+   }
+  }catch{message('公开直链探测请求失败','danger');}
+  finally{checkPublic.disabled=false;}
+ },'btn btn-outline-secondary btn-sm mt-2');
  const panel=document.createElement('section');panel.className='card p-3 mt-4';
- const title=document.createElement('h2');title.className='h5';title.textContent='管理员 Microsoft OneDrive 授权';panel.append(title);
- const msg=document.createElement('p');msg.className='small text-secondary';msg.textContent=state.data.connected?'已连接 Microsoft 账户':'尚未连接 Microsoft 账户';panel.append(msg);
- const btn=(label,action)=>{const b=document.createElement('button');b.className='btn btn-outline-primary btn-sm me-2 mb-2';b.textContent=label;b.addEventListener('click',action);panel.append(b);};
- btn('连接 Microsoft 账户',async()=>{const r=await fetch('/api/v1/admin/onedrive/oauth/start');const j=await r.json();if(j.success&&j.data.authorization_url){location.assign(j.data.authorization_url);}else msg.textContent=j.error?.message||'授权启动失败';});
- btn('解析当前链接（管理员）',async()=>{const url=document.getElementById('od-url')?.value.trim();if(!url)return;msg.textContent='正在通过 Microsoft Graph 读取文件信息…';const r=await fetch('/api/v1/admin/onedrive/graph/resolve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url})});const j=await r.json();if(!j.success){msg.textContent=j.error?.message||'Graph 解析失败';return;}
- msg.textContent=`文件：${j.data.name||'未知'}；大小：${j.data.size??'未知'}；下载链接：${j.data.download_verified?'已获得短期有效地址':'未返回'}`;
- if(j.data.download_url){const a=document.createElement('a');a.href=j.data.download_url;a.textContent='打开临时下载地址（仅管理员）';a.rel='noreferrer noopener';a.target='_blank';panel.append(a);}
- });
- btn('解除 Microsoft 连接',async()=>{if(!confirm('确定断开 OneDrive？此操作不撤销微软端授权，请按需在 Microsoft 账户中撤销。'))return;const r=await fetch('/api/v1/admin/onedrive/oauth',{method:'DELETE'});if(r.ok)msg.textContent='已断开，请刷新页面';});
- root.append(panel);
-})();
+ const title=document.createElement('h2');title.className='h5';title.textContent='固定入口管理（登录用户）';panel.append(title);
+ const info=document.createElement('p');info.className='small text-secondary';info.textContent='固定入口默认打开原分享页；也可为自己的链接启用公开直链尝试。';panel.append(info);
+ const list=document.createElement('div');list.className='mt-3';
+ addButton(panel,'为当前链接创建固定入口',async()=>{
+  const url=getUrl();if(!url)return message('请先填写分享链接','warning');
+  try{
+   const {response,data}=await json('/api/v1/tools/onedrive/links',{
+    method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url})
+   });
+   if(response.status===401){hideLoggedInControls();return;}
+   if(!data.success)return message(data.error?.message||'创建失败','warning');
+   message(data.data.message||'固定入口已创建','success');await loadLinks(list,panel);
+  }catch{message('网络异常','danger');}
+ },'btn btn-outline-primary btn-sm');
+ panel.append(list);root.append(panel);main.append(root);extraControls=root;
+ void loadLinks(list,panel);
+}
+
+async function checkStatus(){
+ try{
+  const {response,data}=await json('/api/v1/tools/onedrive/status');
+  if(!response.ok||!data.success){
+   enabled=false;submit.disabled=true;hideLoggedInControls();
+   message(data.error?.message||'OneDrive 工具当前不可用','warning');return;
+  }
+  const status=data.data||{};
+  enabled=Boolean(status.enabled&&(status.authenticated||status.anonymous_enabled));
+  authenticated=Boolean(status.authenticated);
+  submit.disabled=!enabled;
+  if(!enabled){hideLoggedInControls();message('当前不允许使用 OneDrive 解析工具。','warning');return;}
+  if(authenticated)mountLoggedInControls();else hideLoggedInControls();
+ }catch{
+  enabled=false;submit.disabled=true;hideLoggedInControls();message('无法读取工具状态，请稍后刷新','warning');
+ }
+}
+void checkStatus();

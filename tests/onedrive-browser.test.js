@@ -34,6 +34,7 @@ test('browse parameters reject malformed IDs, searches and OData sort injection'
 
 test('Graph thumbnail URL validation restricts origins and sanitizes items',()=>{
  assert.equal(validatedThumbnailUrl('https://sn1.files.1drv.com/th.jpg'),'https://sn1.files.1drv.com/th.jpg');
+ assert.equal(validatedThumbnailUrl('https://my.microsoftpersonalcontent.com/personal/test/_api/v2.0/thumbnails'),'https://my.microsoftpersonalcontent.com/personal/test/_api/v2.0/thumbnails');
  assert.equal(validatedThumbnailUrl('https://evil.sharepoint.com.evil.test/thumb'),null);
  assert.equal(validatedThumbnailUrl('javascript:alert(1)'),null);
  assert.equal(validatedThumbnailUrl('https://someone:pass@contoso.sharepoint.com/x'),null);

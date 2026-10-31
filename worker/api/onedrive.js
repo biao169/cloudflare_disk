@@ -15,7 +15,10 @@ export async function onedriveRoute(req,env,path){
  if(!s.onedrive_tool_enabled)return error('TOOL_DISABLED','管理员已关闭 OneDrive 直链工具',403);
  const user=await resolveUser(req,env);
  if(!s.onedrive_anonymous_enabled&&!user)return error('LOGIN_REQUIRED','管理员已关闭匿名使用，请先登录',401);
- if(path.endsWith('/status'))return ok({enabled:true,anonymous_enabled:s.onedrive_anonymous_enabled,authenticated:!!user,capability:'format_and_best_effort_anonymous_probe',requires_graph_authorization_for_download:true,limits:user?{minute:s.onedrive_user_minute_limit,hour:s.onedrive_user_hour_limit,day:s.onedrive_user_day_limit}:{minute:s.onedrive_guest_minute_limit,hour:s.onedrive_guest_hour_limit,day:s.onedrive_guest_day_limit}});
+ if(path.endsWith('/status'))return ok({enabled:true,anonymous_enabled:s.onedrive_anonymous_enabled,authenticated:!!user,capability:user?'format_and_best_effort_anonymous_probe':'format_only',requires_graph_authorization_for_download:true,limits:user?{minute:s.onedrive_user_minute_limit,hour:s.onedrive_user_hour_limit,day:s.onedrive_user_day_limit}:{minute:s.onedrive_guest_minute_limit,hour:s.onedrive_guest_hour_limit,day:s.onedrive_guest_day_limit}});
+ // RC14.12 UI policy: anonymous users may parse format only. Public-download probing
+ // is reserved for authenticated sessions, even if someone calls the API directly.
+ if(path.endsWith('/public-check')&&!user)return error('LOGIN_REQUIRED','公开直链探测需要先登录 CloudDrive',401);
  const type=req.headers.get('Content-Type')||'';
  if(!/^application\/json(?:\s*;|$)/i.test(type))return error('INVALID_CONTENT_TYPE','请提交 JSON 数据',415);
  const length=Number(req.headers.get('Content-Length')||0);

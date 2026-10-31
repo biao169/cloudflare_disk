@@ -46,6 +46,36 @@ test('untrusted Graph /content redirect yields a safe diagnostic not a runtime T
  assert.equal(env.DB.query('SELECT last_error FROM onedrive_drive_publications WHERE id=?',ID).last_error,'MICROSOFT_DOWNLOAD_REDIRECT_UNTRUSTED');
  const diag=await api(env,`/api/v1/admin/onedrive/drive/publications/${ID}/download-diagnostic`,{cookie:user.cookie});assert.equal(diag.data.data.code,'MICROSOFT_DOWNLOAD_REDIRECT_UNTRUSTED');assert.equal(diag.data.data.available,false);
 });
+test('Graph metadata downloadUrl on Microsoft personal-content service is accepted and downloads redirect safely',async t=>{
+ const {env,user}=await setup(t);
+ const loc='https://my.microsoftpersonalcontent.com/personal/45ed996b079ab860/_layouts/15/download.aspx?UniqueId=11111111-1111-1111-1111-111111111111&tempauth=SECRET_DOWNLOAD_ONLY';
+ withFetch(t,url=>{assert.ok(!url.pathname.endsWith('/content'));return Response.json(item(loc));});
+ const out=await api(env,`/r/${ID}`);
+ assert.equal(out.status,302);
+ assert.equal(out.response.headers.get('Location'),loc);
+ assert.equal(out.response.headers.get('Referrer-Policy'),'no-referrer');
+ assert.equal(out.response.headers.has('Authorization'),false);
+ checkCount(env,1);
+ const diag=await api(env,`/api/v1/admin/onedrive/drive/publications/${ID}/download-diagnostic`,{cookie:user.cookie});
+ assert.equal(diag.status,200);
+ assert.equal(diag.data.data.available,true);
+ assert.ok(!JSON.stringify(diag.data).includes('SECRET_DOWNLOAD_ONLY'));
+});
+
+test('Graph /content 302 on Microsoft personal-content service is accepted; disallowed host diagnostics reveal only the hostname',async t=>{
+ const {env,user}=await setup(t);
+ const loc='https://my.microsoftpersonalcontent.com/personal/45ed996b079ab860/_layouts/15/download.aspx?UniqueId=abc&tempauth=CONFIDENTIAL';
+ let evil=false;
+ withFetch(t,url=>url.pathname.endsWith('/content')?new Response(null,{status:302,headers:{Location:evil?'https://attacker.example.invalid/content?token=CONFIDENTIAL':loc}}):Response.json(item()));
+ const out=await api(env,`/r/${ID}`);
+ assert.equal(out.status,302);assert.equal(out.response.headers.get('Location'),loc);checkCount(env,1);
+ evil=true;
+ const bad=await api(env,`/api/v1/admin/onedrive/drive/publications/${ID}/download-diagnostic`,{cookie:user.cookie});
+ assert.equal(bad.data.data.code,'MICROSOFT_DOWNLOAD_REDIRECT_UNTRUSTED');
+ assert.equal(bad.data.data.blocked_download_host,'attacker.example.invalid');
+ assert.ok(!JSON.stringify(bad.data).includes('CONFIDENTIAL'));
+});
+
 test('Graph throttling keeps Retry-After and never charges a download',async t=>{
  const {env}=await setup(t);withFetch(t,()=>new Response('too many',{status:429,headers:{'Retry-After':'120'}}));
  const r=await api(env,`/r/${ID}`);assert.equal(r.status,503);assert.equal(r.response.headers.get('Retry-After'),'120');assert.equal(r.response.headers.get('X-CloudDrive-Error-Code'),'MICROSOFT_THROTTLED');checkCount(env,0);

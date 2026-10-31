@@ -1,3 +1,7 @@
+> **OneDrive 独立配置页签与匿名工具界面（RC14.12 UI 修复）：** 系统设置新增「OneDrive 配置」（`/settings?tab=onedrive`），集中管理 Microsoft OAuth / API 变量、账号授权、同步、匿名开关与解析配额；站点设置不再包含这些项。`/tools/onedrive` 未登录且允许匿名解析时只展示上方的格式解析，隐藏固定链接、直链探测和账号管理按钮。无需 D1 迁移或新 Secret。详见 [配置界面说明](docs/RC14_12_ONEDRIVE_SETTINGS_UI.md)。
+
+> **OneDrive 下载目标兼容修复（2026-10-31）：** 支持微软个人版 `my.microsoftpersonalcontent.com` 的安全下载跳转。原有 `MICROSOFT_DOWNLOAD_REDIRECT_UNTRUSTED` 可能是旧域名白名单遗漏；管理员诊断现在仅显示被拦截主机名，不暴露带 tempauth 的微软地址。详见 [下载与部署修复说明](docs/RC14_12_DOWNLOAD_DEPLOY_FIX.md)。无需 D1 迁移及重新授权。
+
 > **RC14.12 下载与部署热修复（2026-10-31）：** `wrangler.jsonc` 设置 `keep_vars: true`，自动部署脚本也会在生成的临时配置中启用 `keep_vars` 并追加 `--keep-vars`，以保留 Cloudflare 网页后台填写的普通 Text 环境变量（如 `MS_CLIENT_ID`）。现有 Microsoft Secrets 不需要更换。OneDrive `/r/odf_*` 下载增加显式 Graph 临时直链请求、旧接口兼容、无重定向时的 `/content` 流式回退和具体故障代码，并支持管理员“诊断下载”。R2、OneDrive 文件夹和公开合集支持双击行/卡片非操作区域打开，原“打开”按钮保留。**不需要新增 D1 迁移。** 详见 [部署及下载修复教程](docs/RC14_12_DOWNLOAD_DEPLOY_FIX.md)。
 
 > **RC14.12 OneDrive 文件同步与运维：** 已公开 OneDrive 文件支持 Graph Delta 增量检测、eTag 条件查询、小批次健康检查、微软限流退避、授权状态诊断，以及后台“同步与运维”面板。同步只检查已发布来源，**不会自动公开文件、复制到 R2 或变更旧固定直链**。新增 `0031_rc14_12_onedrive_sync.sql` 迁移，适配有历史分享记录的数据库；默认沿用 6 小时 UTC Cron 和每批 8 文件。无新增强制 Secret。部署、设置项下方教程及注意事项见 [RC14.12 配置与运维说明](docs/RC14_12_ONEDRIVE_SYNC_OPERATIONS.md)。
@@ -16,7 +20,7 @@
 
 > **RC14.7 Microsoft OAuth 回调诊断修复：** 若之前出现 `OAUTH_CALLBACK_ERROR / OAUTH_FAILED`，新版会区分微软拒绝、账户类型、授权同意、回调 URI、Session 丢失及 Token 兑换错误。系统设置会显示**准确回调地址**，可选用 `MS_REDIRECT_URI` 固定自定义域名；无需变更 `MS_TOKEN_KEY` 或 D1。请看 [OAuth 回调排错和配置教程](docs/RC14_7_MICROSOFT_OAUTH_CALLBACK_FIX.md)。
 
-> **RC14.7 Microsoft OneDrive 配置热修复：** `MICROSOFT_TOKEN_KEY_MISSING` 现在会明确区分“当前 Worker 运行时未收到 MS_TOKEN_KEY”和“密钥格式不正确”。系统设置 → 站点设置 → Microsoft OneDrive 账户新增三项运行时配置检查和详细教程；修复内容、密钥生成方式及生产/预览绑定排查请看 [Microsoft OAuth 配置排错](docs/RC14_7_MICROSOFT_CONFIG_FIX.md)。升级不需要额外 D1 迁移，原有 `MS_TOKEN_KEY` 不应更换。
+> **RC14.7 Microsoft OneDrive 配置热修复：** `MICROSOFT_TOKEN_KEY_MISSING` 现在会明确区分“当前 Worker 运行时未收到 MS_TOKEN_KEY”和“密钥格式不正确”。系统设置 → OneDrive 配置 → Microsoft OneDrive 账户提供三项运行时配置检查和详细教程；修复内容、密钥生成方式及生产/预览绑定排查请看 [Microsoft OAuth 配置排错](docs/RC14_7_MICROSOFT_CONFIG_FIX.md)。升级不需要额外 D1 迁移，原有 `MS_TOKEN_KEY` 不应更换。
 
 > **RC14.1 历史说明（现已升级至 RC14.7）**：当时新增 `/tools/onedrive` 匿名分享链接格式解析工具。管理员在“系统设置”中可关闭工具或匿名访问。此版本**仅校验格式并生成 Graph 分享令牌**，不读取分享内容、不请求微软、不提供下载直链；真正的 Graph/OAuth 文件解析安排在后续阶段。
 

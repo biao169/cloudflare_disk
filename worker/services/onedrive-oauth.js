@@ -138,10 +138,39 @@ export async function connectionStatus(env,req=null){
 }
 export async function disconnect(env){await execute(dbFromEnv(env),"DELETE FROM onedrive_oauth_account WHERE id='admin'");}
 export async function graphResolve(env,url){const parsed=parseOneDriveUrl(url);const token=await getAccessToken(env);const r=await fetch(`https://graph.microsoft.com/v1.0/shares/${encodeURIComponent(parsed.share_token)}/driveItem`,{headers:{Authorization:`Bearer ${token}`,Prefer:'redeemSharingLinkIfNecessary'},redirect:'manual',signal:AbortSignal.timeout(12000)});if(!r.ok){if(r.status===429||r.status===503)throw Error('MICROSOFT_THROTTLED');if(r.status===401)throw Error('MICROSOFT_REAUTHORIZE');if(r.status===403)throw Error('MICROSOFT_ACCESS_DENIED');if(r.status===404)throw Error('MICROSOFT_NOT_FOUND');throw Error('MICROSOFT_GRAPH_FAILED');}const j=await r.json();const download=j['@microsoft.graph.downloadUrl'];return {name:j.name||null,size:j.size??null,mime_type:j.file?.mimeType||null,drive_id:j.parentReference?.driveId||null,item_id:j.id||null,etag:j.eTag||null,download_url:validMicrosoftDownloadUrl(download)?download:null,download_verified:validMicrosoftDownloadUrl(download),is_folder:!!j.folder,shared_scope:j.shared?.scope||null};}
-// Only allow Microsoft-hosted temporary delivery destinations; never treat a caller URL as a proxy target.
+// Graph's short-lived download URLs can use different Microsoft-owned delivery hosts.
+// In particular, personal OneDrive also uses my.microsoftpersonalcontent.com
+// (_layouts/15/download.aspx), not just the historical *.files.1drv.com CDN.
+// Keep a *bounded* Microsoft-only allowlist: do not accept arbitrary URL targets,
+// client-supplied hosts, suffix lookalikes, credentials, non-HTTPS or ports.
+// These URLs are NEVER persisted and must NEVER receive the OAuth Bearer token.
+const MICROSOFT_DELIVERY_SUFFIXES=[
+ '.files.1drv.com',
+ '.sharepoint.com',
+ '.sharepointonline.com',
+ '.microsoftpersonalcontent.com',
+ '.storage.live.com',
+ '.livefilestore.com'
+];
+export function microsoftDownloadTargetHost(value){
+ if(typeof value!=='string'||value.length>8192||/[\u0000-\u001f\u007f]/.test(value))return null;
+ try{
+  const u=new URL(value);
+  const host=u.hostname.toLowerCase();
+  return host.length<=253&&/^[a-z0-9.-]+$/.test(host)&&!host.endsWith('.')?host:null;
+ }catch{return null;}
+}
 export function validMicrosoftDownloadUrl(value){
- if(typeof value!=='string'||value.length>8192)return false;
- try{const u=new URL(value);if(u.protocol!=='https:'||u.username||u.password||u.port||u.hash)return false;
- const h=u.hostname.toLowerCase();return h==='public.dm.files.1drv.com'||h.endsWith('.files.1drv.com')||h.endsWith('.sharepoint.com')||h.endsWith('.sharepointonline.com')||h.endsWith('.1drv.com');
+ const host=microsoftDownloadTargetHost(value);
+ if(!host)return false;
+ try{
+  const u=new URL(value);
+  if(u.protocol!=='https:'||u.username||u.password||u.port||u.hash)return false;
+  // A download endpoint on Microsoft's personal-content service is not an
+  // arbitrary SharePoint page. Only allow the documented download.aspx path.
+  if(host.endsWith('.microsoftpersonalcontent.com'))
+   return /\/_layouts\/15\/download\.aspx$/i.test(u.pathname);
+  return host==='storage.live.com'||host==='public.dm.files.1drv.com'||
+   MICROSOFT_DELIVERY_SUFFIXES.some(suffix=>host.endsWith(suffix));
  }catch{return false;}
 }

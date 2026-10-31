@@ -48,6 +48,16 @@
 - 大文件流式回退可能占用 Worker 子请求、连接时长与传输资源；建议优先 302，必要时再走流式回退。
 - 本地 Graph 模拟测试通过，但**没有连接用户真实微软账号进行端到端下载验证**。如上线后继续失败，请提供 `X-CloudDrive-Error-Code` 或“诊断下载”返回的**代码及 HTTP 状态**，不要提供密钥、授权码、带令牌的微软临时 URL。
 
+### OneDrive 个人版下载目标热修复（2026-10-31）
+
+部分个人 OneDrive 账号的 Microsoft Graph `/content` 302 Location 或 `@microsoft.graph.downloadUrl` 不再是旧的 `*.files.1drv.com`，而是 `https://my.microsoftpersonalcontent.com/personal/.../_layouts/15/download.aspx?UniqueId=...&tempauth=...`。旧版下载安全白名单漏掉了该域名，因此会返回 `MICROSOFT_DOWNLOAD_REDIRECT_UNTRUSTED`，即使 Graph 已成功取得临时下载地址。
+
+本次针对微软发布或微软社区证实的下载服务域名扩展白名单，并限制 HTTPS、账号密码字段、非标准端口和 fragment；微软个人内容服务必须命中 `/_layouts/15/download.aspx` 路径。仍不会接受任意下载服务器或 `example.com` 伪装的子域名。Graph 访问令牌只发送给 `graph.microsoft.com`，绝不跟随重定向发送给下载服务器。
+
+管理员使用 `OneDrive 文件 → 已发布直链 → 诊断下载` 可查看 `blocked_download_host`（**仅主机名**），不会返回包含 tempauth 的完整下载 URL，也不扣下载配额。若修复后出现 401/403 或浏览器登录页，说明可能是微软临时签名失效、权限或上游下载政策问题，允许该域名本身不能解决；应重新检查 Graph 授权和实际文件。微软预授权地址不会保存在 D1。
+
+适配后的现有分享 ID 及 `/r/odf_*`、`/s/odf_*` 均无需变更，不需要新增数据库迁移。
+
 ## 3. 文件夹双击
 
 - R2 文件管理页面的列表行、网格卡片：双击文件夹的**非按钮区域**进入目录，原有文件夹名称、操作按钮功能保留。

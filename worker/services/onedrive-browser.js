@@ -1,5 +1,5 @@
 // RC14.8: authenticated OneDrive explorer (never an unauthenticated Graph proxy).
-import {getAccessToken} from './onedrive-oauth.js';
+import {getAccessToken,validMicrosoftDownloadUrl} from './onedrive-oauth.js';
 import {requireMicrosoftConfig} from './microsoft-config.js';
 
 const GRAPH_ORIGIN='https://graph.microsoft.com';
@@ -50,7 +50,7 @@ export function validatedThumbnailUrl(value){
  if(typeof value!=='string'||value.length>6000)return null;
  try{const u=new URL(value);if(u.protocol!=='https:'||u.port||u.username||u.password||u.hash)return null;
  const host=u.hostname.toLowerCase();
- if(host==='onedrive.live.com'||host==='public.dm.files.1drv.com'||host.endsWith('.files.1drv.com')||host.endsWith('.sharepoint.com')||host.endsWith('.sharepointonline.com')||host.endsWith('.onedrive.com'))return u.href;
+ if(validMicrosoftDownloadUrl(value)||host==='onedrive.live.com'||host.endsWith('.onedrive.com')||host==='my.microsoftpersonalcontent.com'||host.endsWith('.microsoftpersonalcontent.com'))return u.href;
  }catch{}return null;
 }
 function itemType(j){const mime=String(j.file?.mimeType||'').toLowerCase();if(j.folder||j.package)return 'folder';if(mime.startsWith('image/'))return 'image';if(mime.startsWith('video/'))return 'video';if(mime.startsWith('audio/'))return 'audio';if(mime==='application/pdf'||mime.startsWith('text/')||mime.includes('document')||mime.includes('word')||mime.includes('presentation')||mime.includes('spreadsheet')||mime.includes('excel'))return 'document';return 'other';}
