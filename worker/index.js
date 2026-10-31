@@ -1,3 +1,4 @@
+import {redirectAuthorizedDriveFile} from './services/onedrive-drive-files.js';
 import {redirectOneDriveLink} from './services/onedrive-links.js';
 import {temporaryLink,publicPublishedFile,smartPublishedFile} from './api/shares.js';
 import {runMaintenance,recordIncident} from './services/operations.js';
@@ -34,6 +35,7 @@ export default {
    if(p.startsWith('/api/'))return json({success:false,error:{code:'NOT_FOUND',message:'接口不存在'}},404);
    if(p.startsWith('/t/')){const result=await temporaryLink(request,env,p);if(result.status>=500)await recordIncident(env,{source:'share.response',code:`HTTP_${result.status}`});return result;}
    if(p.startsWith('/p/')){const result=await publicPublishedFile(request,env,p);if(result.status>=500)await recordIncident(env,{source:'share.response',code:`HTTP_${result.status}`});return result;}
+   if(/^\/r\/odf_[a-f0-9]{32}$/.test(p))return redirectAuthorizedDriveFile(request,env,p.slice(3));
    if(/^\/r\/od_[a-f0-9]{32}$/.test(p))return redirectOneDriveLink(request,env,p.slice(3));
    if(p.startsWith('/r/')){const result=await smartPublishedFile(request,env,p);if(result.status>=500)await recordIncident(env,{source:'share.response',code:`HTTP_${result.status}`});return result;}
    if(p==='/tools/onedrive')return assetPage(request,env,'/onedrive.html');

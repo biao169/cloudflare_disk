@@ -1,3 +1,4 @@
+import {formatUtc} from '../utils/time.js';
 import {chooseUploadConflict} from '../components/replace-conflict.js';
 import {canEditText,openTextEditor} from '../components/text-editor.js';
 import {openVersionDialog} from '../components/version-dialog.js';
@@ -15,7 +16,7 @@ const el=(tag,cls='',text='')=>{const n=document.createElement(tag);n.className=
 const fileKey=x=>`${x.kind}:${x.id}`;
 const fileIcon=x=>x.kind==='folder'?'📁':x.mime_type?.startsWith('image/')?'🖼️':x.mime_type?.startsWith('video/')?'🎬':x.mime_type==='application/pdf'?'📕':'📄';
 const size=n=>!Number.isFinite(Number(n))?'—':Number(n)>=1073741824?`${(n/1073741824).toFixed(2)} GB`:n>=1048576?`${(n/1048576).toFixed(1)} MB`:n>=1024?`${(n/1024).toFixed(1)} KB`:`${n} B`;
-const date=v=>{if(!v)return '—';const stamp=/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$/.test(v)?v.replace(' ','T')+'Z':v;const d=new Date(stamp);return Number.isFinite(d.getTime())?d.toLocaleString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}):v;};
+const date=v=>formatUtc(v);
 const btn=(text,fn,cls='btn btn-sm btn-outline-secondary')=>{const b=el('button',cls,text);b.type='button';b.onclick=fn;return b;};
 const option=(value,label)=>{const o=el('option','',label);o.value=value;return o};
 const isUuid=id=>typeof id==='string'&&/^[a-f0-9-]{36}$/.test(id);

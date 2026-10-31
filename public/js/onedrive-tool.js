@@ -12,7 +12,7 @@ checkStatus();
 // RC14.3: logged-in users may manage stable source-page links. These links are
 // deliberately NOT advertised as direct file downloads until Graph is integrated.
 const linkPanel=document.createElement('section');linkPanel.className='card p-3 mt-4';
-linkPanel.innerHTML='<h2 class="h5">固定入口管理（登录用户）</h2><p class="small text-secondary">创建 /r/ 固定入口，点击后跳转到原始 OneDrive 分享页；暂不支持直接文件下载。</p>';
+linkPanel.innerHTML='<h2 class="h5">固定入口管理（登录用户）</h2><p class="small text-secondary">固定入口默认打开原分享页；可为自己的链接启用公开直链尝试。若微软不允许免登录下载，自动回退分享页。</p>';
 const createButton=document.createElement('button');createButton.className='btn btn-outline-primary btn-sm';createButton.textContent='为当前链接创建固定入口';
 const linkList=document.createElement('div');linkList.className='mt-3';
 linkPanel.append(createButton,linkList);document.querySelector('main')?.append(linkPanel);
@@ -20,13 +20,15 @@ async function loadLinks(){
  try{const r=await fetch('/api/v1/tools/onedrive/links',{credentials:'same-origin'});if(r.status===401){linkPanel.hidden=true;return;}
  const j=await r.json();if(!j.success)return;linkList.replaceChildren();
  for(const item of j.data.links){const el=document.createElement('div');el.className='border-top py-2';const a=document.createElement('a');a.href=item.url;a.textContent=`${location.origin}${item.url}`;a.rel='noopener noreferrer';a.target='_blank';el.append(a,document.createTextNode(` (${item.status}; ${item.access_count} 次访问) `));
- if(item.status==='active'){const b=document.createElement('button');b.className='btn btn-outline-danger btn-sm ms-2';b.textContent='撤销';b.onclick=async()=>{if(!confirm('撤销此固定入口？'))return;await fetch('/api/v1/tools/onedrive/links/'+item.id,{method:'DELETE',credentials:'same-origin'});await loadLinks();};el.append(b);}linkList.append(el);}
+ if(item.status==='active'){const mode=document.createElement('button');mode.className='btn btn-outline-secondary btn-sm ms-2';mode.textContent=item.delivery==='public_direct'?'关闭直链尝试':'尝试公开直链';mode.onclick=async()=>{const r=await fetch('/api/v1/tools/onedrive/links/'+item.id,{method:'PATCH',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({delivery_mode:item.delivery==='public_direct'?'source_page_redirect':'public_direct'})});const j=await r.json();if(!j.success)message(j.error?.message||'更新失败','warning');await loadLinks();};el.append(mode);const b=document.createElement('button');b.className='btn btn-outline-danger btn-sm ms-2';b.textContent='撤销';b.onclick=async()=>{if(!confirm('撤销此固定入口？'))return;await fetch('/api/v1/tools/onedrive/links/'+item.id,{method:'DELETE',credentials:'same-origin'});await loadLinks();};el.append(b);}linkList.append(el);}
  }catch{linkList.textContent='固定入口列表加载失败';}
 }
 createButton.onclick=async()=>{const url=document.getElementById('od-url').value.trim();if(!url)return message('请先填写分享链接','warning');
  try{const r=await fetch('/api/v1/tools/onedrive/links',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify({url})});const j=await r.json();if(!j.success)return message(j.error?.message||'创建失败','warning');message(j.data.message,'success');await loadLinks();}
  catch{message('网络异常','danger');}};
 loadLinks();
+
+const checkPublic=document.createElement('button');checkPublic.className='btn btn-outline-secondary btn-sm mt-2';checkPublic.textContent='验证公开文件直链（无需微软登录）';checkPublic.onclick=async()=>{const url=document.getElementById('od-url').value.trim();if(!url)return message('请先填写分享链接','warning');checkPublic.disabled=true;try{const r=await fetch('/api/v1/tools/onedrive/public-check',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify({url})});const j=await r.json();if(!j.success)return message(j.error?.message||'检查失败','warning');message(j.data.anonymous_direct_verified?'已取得无需微软登录的短期有效直链（可生成固定入口并开启直链尝试）。':'未能确认公开下载能力：'+j.data.reason+'。仍可使用原分享页入口。',j.data.anonymous_direct_verified?'success':'warning');if(j.data.anonymous_direct_verified){const a=document.createElement('a');a.href=j.data.download_url;a.target='_blank';a.rel='noopener noreferrer';a.textContent='打开刚解析的临时下载直链';out.append(a);}}catch{message('公开直链探测请求失败','danger');}finally{checkPublic.disabled=false;}};form.after(checkPublic);
 
 // RC14.4: Admin-only Microsoft connection panel (the backend checks admin role).
 (async()=>{

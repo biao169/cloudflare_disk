@@ -1,9 +1,10 @@
+import {formatUtc} from '../utils/time.js';
 import {requestJSON} from '../api.js';
 import {openShareDialog,shareStatusLabel} from '../components/share-dialog.js';
 import {openPublicationManager} from '../components/publication-manager.js';
 const el=(tag,cls='',text='')=>{const n=document.createElement(tag);n.className=cls;n.textContent=text;return n;};
 const button=(name,fn,cls='btn btn-sm btn-outline-secondary')=>{const b=el('button',cls,name);b.type='button';b.onclick=fn;return b;};
-const format=raw=>{if(!raw)return '永久';const v=/^\d{4}-\d\d-\d\d /.test(raw)?raw.replace(' ','T')+'Z':raw;const d=new Date(v);return Number.isNaN(d.getTime())?raw:d.toLocaleString('zh-CN');};
+const format=raw=>formatUtc(raw,{fallback:'永久'});
 export async function renderShares(host){
  host.replaceChildren();host.append(el('h1','h3','分享管理'),el('p','small text-secondary','文件行的「分享」按钮和这里使用同一套弹窗：查看已有链接、编辑权限、重新获取或轮换链接。'));
  const message=el('div','mb-2'),filter=el('select','form-select form-select-sm mb-3');filter.style.maxWidth='230px';filter.setAttribute('aria-label','筛选分享状态');

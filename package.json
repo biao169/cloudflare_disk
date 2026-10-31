@@ -1,6 +1,6 @@
 {
   "name": "clouddrive",
-  "version": "1.0.0-rc.14.5",
+  "version": "1.0.0-rc.14.7",
   "private": true,
   "type": "module",
   "description": "CloudDrive RC14.5: OneDrive security and operations",

@@ -1,3 +1,4 @@
+import {addOneDriveSettings} from './onedrive-settings.js';
 // RC9 lightweight production operations UI. All dynamic text uses textContent.
 import {requestJSON} from '../api.js';
 const MiB=1024**2;
@@ -69,6 +70,7 @@ export async function renderAdmin(host){host.replaceChildren(node('h1','h3 mb-3'
   addQuotaTab(slots.quota,dash,host);
   await Promise.all([addMaintenanceTab(slots.maintenance),addIncidentsTab(slots.incidents),addBackupTab(slots.backups)]);
   addSettingsTab(slots.settings,dash,host);
+  await addOneDriveSettings(slots.settings);
   const od=panel('OneDrive 解析配额统计（当前窗口）');slots.settings.append(od.container);requestJSON('/api/v1/admin/onedrive/stats').then(result=>{const table=lineTable(['窗口','解析请求数','活跃标识数']);od.body.append(table.wrap);for(const item of result.windows||[]){const tr=node('tr');tr.append(node('td','',item.window_name),node('td','',String(item.hits)),node('td','',String(item.subjects)));table.tbody.append(tr)}}).catch(e=>message(od.body,errorText(e),'warning')); 
  }catch(e){area.replaceChildren(node('div','alert alert-danger',errorText(e)));}
 }

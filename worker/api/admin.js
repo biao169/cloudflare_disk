@@ -1,3 +1,4 @@
+import {driveFileAdminRoute} from '../services/onedrive-drive-files.js';
 import {oneDriveOperationalStatus} from '../services/onedrive-maintenance.js';
 import {startOAuth,finishOAuth,graphResolve,connectionStatus,disconnect} from '../services/onedrive-oauth.js';
 import {oneDriveStats} from '../services/onedrive-quota.js';
@@ -11,6 +12,7 @@ export async function adminRoute(req,env,path){
  const user=await resolveUser(req,env);if(!user)return error('UNAUTHORIZED','请先登录',401);
  if(user.role!=='super_admin')return error('FORBIDDEN','仅超级管理员可操作',403);
  const db=dbFromEnv(env),method=req.method;
+ if(path.startsWith('/api/v1/admin/onedrive/drive/'))return driveFileAdminRoute(req,env,path);
  if(path==='/api/v1/admin/onedrive/oauth/start'&&req.method==='GET'){
   try{return ok({authorization_url:await startOAuth(req,env,user.id)});}catch(e){return error('OAUTH_CONFIG_ERROR',e.message,503);}
  }

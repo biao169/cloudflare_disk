@@ -1,3 +1,4 @@
+import {resolveAnonymousDownload} from './onedrive-public.js';
 import {dbFromEnv,one,execute,many} from './database.js';
 import {parseOneDriveUrl} from './onedrive.js';
 import {settings} from './admin.js';
@@ -9,7 +10,7 @@ const TOKEN=/^[a-f0-9]{64}$/;
 const hex=bytes=>Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('');
 async function digest(s){return hex(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(s))));}
 function randomHex(bytes){const b=new Uint8Array(bytes);crypto.getRandomValues(b);return hex(b);}
-function safeMetadata(row){return {id:row.id,url:`/r/${row.id}`,delivery:'source_page_redirect',status:row.status,created_at:row.created_at,expires_at:row.expires_at,last_error:row.last_error??null,access_count:row.access_count};}
+function safeMetadata(row){return {id:row.id,url:`/r/${row.id}`,delivery:row.delivery_mode||'source_page_redirect',status:row.status,created_at:row.created_at,expires_at:row.expires_at,last_error:row.last_error??null,access_count:row.access_count};}
 const responseHeaders={'Cache-Control':'no-store, private','Referrer-Policy':'no-referrer','X-Robots-Tag':'noindex, nofollow','X-Content-Type-Options':'nosniff'};
 export async function createOneDriveLink(req,env,body){
  const db=dbFromEnv(env),s=await settings(db);
@@ -42,8 +43,24 @@ export async function redirectOneDriveLink(req,env,id){
  // Parse on EVERY access, preventing redirects to arbitrary domains if DB is altered.
  let parsed;try{parsed=parseOneDriveUrl(row.source_url);}catch{return new Response('Source invalid',{status:502,headers:responseHeaders});}
  if(req.method==='GET')await execute(db,`UPDATE onedrive_fixed_links SET access_count=access_count+1,last_accessed_at=CURRENT_TIMESTAMP WHERE id=? AND status='active'`,[id]);
- // No Graph credentials are configured in RC14.3: redirect only to original share page.
+ // Only independently verified unauthenticated redirects may be exposed.
+ // Do not use Graph administrator credentials or its preauthorized URL here.
+ if(row.delivery_mode==='public_direct' && req.method==='GET'){
+  const proof=await resolveAnonymousDownload(parsed.url);
+  if(proof.verified)return new Response(null,{status:302,headers:{...responseHeaders,Location:proof.location}});
+  // Keep the fixed link functional if Microsoft changes anonymous endpoints.
+  // This is a share-page fallback, NOT a direct file download.
+ }
  return new Response(null,{status:302,headers:{...responseHeaders,Location:parsed.url}});
+}
+export async function setOneDriveDelivery(req,env,id){
+ const user=await resolveUser(req,env);if(!user)return error('LOGIN_REQUIRED','请先登录',401);
+ if(!ID.test(id))return error('NOT_FOUND','链接不存在',404);
+ let body;try{body=await req.json();}catch{return error('INVALID_JSON','JSON 格式错误',400);}
+ if(!['source_page_redirect','public_direct'].includes(body?.delivery_mode))return error('INVALID_MODE','下载模式无效',400);
+ const result=await execute(dbFromEnv(env),`UPDATE onedrive_fixed_links SET delivery_mode=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND created_by=? AND status='active'`,[body.delivery_mode,id,user.id]);
+ if(!result.meta?.changes)return error('NOT_FOUND','链接不存在',404);
+ return ok({id,delivery_mode:body.delivery_mode,public_direct_is_best_effort:true,anonymous_access_must_be_verified_per_request:true});
 }
 export async function oneDriveLinkApi(req,env,path){
  if(path==='/api/v1/tools/onedrive/links'){
@@ -57,5 +74,6 @@ export async function oneDriveLinkApi(req,env,path){
  }
  const m=/^\/api\/v1\/tools\/onedrive\/links\/(od_[a-f0-9]{32})$/.exec(path);
  if(m&&req.method==='DELETE')return revokeOneDriveLink(req,env,m[1]);
+ if(m&&req.method==='PATCH')return setOneDriveDelivery(req,env,m[1]);
  return error('NOT_FOUND','接口不存在',404);
 }

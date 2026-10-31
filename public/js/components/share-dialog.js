@@ -1,15 +1,17 @@
+import {formatUtc,parseUtc,localInputFromUtc,utcFromLocalInput} from '../utils/time.js';
 import {openPublicationManager} from './publication-manager.js';
 import {requestJSON} from '../api.js';
 
 const el=(tag,cls='',text='')=>{const n=document.createElement(tag);n.className=cls;n.textContent=text;return n;};
 const button=(text,fn,cls='btn btn-sm btn-outline-secondary')=>{const n=el('button',cls,text);n.type='button';n.onclick=fn;return n;};
 const visible=(node,yes)=>{node.hidden=!yes;node.classList.toggle('d-none',!yes);};
-const utcDate=raw=>{if(!raw)return null;const value=/^\d{4}-\d\d-\d\d /.test(raw)?raw.replace(' ','T')+'Z':raw;const d=new Date(value);return Number.isFinite(d.getTime())?d:null;};
-const format=raw=>utcDate(raw)?.toLocaleString('zh-CN')||(!raw?'永久':String(raw));
+const utcDate=parseUtc;
+const format=raw=>formatUtc(raw,{fallback:'永久'});
 const expiryDate=(choice,custom)=>{
  if(choice==='never')return null;
  if(choice==='custom'){
-  const d=new Date(custom);
+  const iso=utcFromLocalInput(custom);
+  const d=iso?new Date(iso):new Date(NaN);
   if(!custom||!Number.isFinite(d.getTime())||d.getTime()<=Date.now()||d.getTime()>Date.now()+366*86400000)throw Error('自定义有效期需在未来 366 天以内');
   return d.toISOString();
  }
@@ -143,7 +145,7 @@ export async function openShareDialog(item,{isAdmin=false,onCreated=()=>{},onCha
   const panel=el('div','card mt-3 border-primary cd-share-editor');const form=el('div','card-body');panel.append(form);
   form.append(el('h4','h6','修改现有链接的属性（URL 不变）'));
   const expired=s.status==='expired';const expiry=expiryControls(s.expires_at&&!expired?'custom':s.expires_at?'7d':'never');
-  if(s.expires_at&&!expired){const dt=utcDate(s.expires_at);if(dt){expiry.custom.value=new Date(dt.getTime()-dt.getTimezoneOffset()*60000).toISOString().slice(0,16);visible(expiry.custom,true);}}
+  if(s.expires_at&&!expired){const dt=utcDate(s.expires_at);if(dt){expiry.custom.value=localInputFromUtc(dt);visible(expiry.custom,true);}}
   const never=expiry.select.querySelector('option[value="never"]');never.disabled=s.type==='temporary';
   const max=downloadLimit(s.max_downloads),allowed=allowField(s.allow_download);form.append(expiry.wrap,max.wrap);
   if(s.type==='page')form.append(allowed.wrap);
