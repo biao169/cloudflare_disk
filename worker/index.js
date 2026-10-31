@@ -6,7 +6,7 @@ import {protectHtml} from './services/security-headers.js';
 import {route,json} from './router.js';
 import {resolveUser} from './services/auth.js';
 
-const APP_PAGES=new Set(['/','/index.html','/files','/personal','/spaces','/recent','/favorites','/search','/shares','/trash','/users','/settings']);
+const APP_PAGES=new Set(['/','/index.html','/files','/personal','/spaces','/recent','/favorites','/search','/shares','/trash','/users','/settings','/onedrive']);
 // Static Assets default HTML canonicalization redirects /login.html -> /login.
 // Since /login is Worker-routed, that would become an infinite redirect loop.
 // wrangler.jsonc sets assets.html_handling='none' to serve these explicit files.
@@ -39,6 +39,8 @@ export default {
    if(/^\/r\/od_[a-f0-9]{32}$/.test(p))return redirectOneDriveLink(request,env,p.slice(3));
    if(p.startsWith('/r/')){const result=await smartPublishedFile(request,env,p);if(result.status>=500)await recordIncident(env,{source:'share.response',code:`HTTP_${result.status}`});return result;}
    if(p==='/tools/onedrive')return assetPage(request,env,'/onedrive.html');
+   if(/^\/s\/odf_[a-f0-9]{32}$/.test(p))return assetPage(request,env,'/onedrive-share.html');
+   if(/^\/s\/odg_[a-f0-9]{32}$/.test(p))return assetPage(request,env,'/onedrive-group.html');
    if(p.startsWith('/s/'))return assetPage(request,env,'/share.html');
    if(p==='/login'||p==='/setup')return assetPage(request,env,'/login.html');
    if(APP_PAGES.has(p)){

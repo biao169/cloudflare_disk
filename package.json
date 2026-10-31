@@ -1,9 +1,9 @@
 {
   "name": "clouddrive",
-  "version": "1.0.0-rc.14.7-oauth-fix",
+  "version": "1.0.0-rc.14.12-onedrive-sync",
   "private": true,
   "type": "module",
-  "description": "CloudDrive RC14.5: OneDrive security and operations",
+  "description": "CloudDrive RC14.12: bounded OneDrive health checks, Graph Delta, diagnostics and retry scheduling",
   "scripts": {
     "dev": "wrangler dev --local",
     "build": "npm run check:migrations && npm run test:all",

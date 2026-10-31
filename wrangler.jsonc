@@ -27,13 +27,14 @@
       "/trash",
       "/users",
       "/settings",
+      "/onedrive",
       "/tools/onedrive"
     ],
     "html_handling": "none"
   },
   "vars": {
     "APP_NAME": "CloudDrive",
-    "APP_STAGE": "rc14.1-onedrive-anonymous-format",
+    "APP_STAGE": "rc14.12-onedrive-sync",
     "PUBLIC_BASE_URL": ""
   },
   "r2_buckets": [

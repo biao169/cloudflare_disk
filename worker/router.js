@@ -1,3 +1,6 @@
+import {publicOneDriveRoute} from './services/onedrive-presentation.js';
+import {unlockShare} from './services/onedrive-share-policy.js';
+import {publicGroupRoute} from './services/onedrive-groups.js';
 import {onedriveRoute} from './api/onedrive.js';
 import {replacementRoute,versionRoutePattern} from './api/replacements.js';
 import {textEditorRoute,textRoutePattern} from './api/text-editor.js';
@@ -26,6 +29,9 @@ export async function route(request,env){
  if(!pathname.startsWith('/api/'))return null;
  try{
   if(!['GET','HEAD','OPTIONS'].includes(request.method)&&!(await csrfAllowed(request)))return error('INVALID_ORIGIN','跨站请求被拒绝',403);
+  if(pathname==='/api/v1/public/onedrive/unlock'&&request.method==='POST')return await unlockShare(request,env);
+  if(pathname.startsWith('/api/v1/public/onedrive/groups/'))return await publicGroupRoute(request,env,pathname);
+  if(pathname.startsWith('/api/v1/public/onedrive/'))return await publicOneDriveRoute(request,env,pathname);
   if(pathname.startsWith('/api/v1/tools/onedrive/'))return await onedriveRoute(request,env,pathname);
   if(pathname.startsWith('/api/v1/folder-sync/'))return await folderSyncRoute(request,env,pathname);
   if(pathname.startsWith('/api/v1/admin/'))return await adminRoute(request,env,pathname);

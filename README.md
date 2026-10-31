@@ -1,3 +1,17 @@
+> **RC14.12 OneDrive 文件同步与运维：** 已公开 OneDrive 文件支持 Graph Delta 增量检测、eTag 条件查询、小批次健康检查、微软限流退避、授权状态诊断，以及后台“同步与运维”面板。同步只检查已发布来源，**不会自动公开文件、复制到 R2 或变更旧固定直链**。新增 `0031_rc14_12_onedrive_sync.sql` 迁移，适配有历史分享记录的数据库；默认沿用 6 小时 UTC Cron 和每批 8 文件。无新增强制 Secret。部署、设置项下方教程及注意事项见 [RC14.12 配置与运维说明](docs/RC14_12_ONEDRIVE_SYNC_OPERATIONS.md)。
+
+> **RC14.11 OneDrive 分享权限与统计：** 已发布文件及文件夹/合集现在支持分享暂停与恢复、访问密码、指定到期时间、仅 CloudDrive 登录用户访问、浏览/下载跳转次数限制、权限继承与后台统计（最近 30 天）。修改权限后旧密码解锁 Cookie 立即失效；原有 `/s/odf_*`、`/r/odf_*` 和 `/s/odg_*` 不变。**需新增 D1 迁移** `0030_rc14_11_onedrive_share_controls.sql`，无强制新增 Secret。详见 [RC14.11 使用说明](docs/RC14_11_ONEDRIVE_SHARE_POLICY.md)。
+
+# CloudDrive V1 — RC14.12
+
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/biao169/cloudflare_disk)
+
+**Cloudflare 网页一键部署：** 点击上方 Deploy to Cloudflare，根据引导连接 GitHub、绑定 D1 和 R2；已部署网站应保留同名 Worker 和原有绑定，使用 `npm run build` / `npm run deploy` 更新。详细部署教程见本文第 0 节。
+
+> **RC14.9 OneDrive 可视化分享页面：** 已发布的 OneDrive 文件现在同时拥有 **`/s/odf_*` 分享页面**和原有 **`/r/odf_*` 下载直链**。分享页可展示标题、介绍、文件大小、浏览器本地时区、封面与二维码；图片、PDF、常见视频格式支持按类型尝试在线预览。管理员在 `/onedrive` →「已发布直链」→「编辑展示」中修改信息、选择封面风格或上传自定义封面（2 MB 以内，保存在现有私有 R2）。需要新增一次 D1 迁移 `0028_rc14_9_onedrive_presentation.sql`；不需要新增 Microsoft Secret，也不要更改现有 `MS_TOKEN_KEY`。详见 [RC14.9 使用和升级教程](docs/RC14_9_ONEDRIVE_PRESENTATION.md)。
+
+> **RC14.8 OneDrive 可视化文件管理：** 管理员登录后从左侧 **OneDrive 文件**（`/onedrive`）进入独立文件浏览器，支持网格/列表视图、全盘搜索、目录导航、Graph 签名分页（60 项/批）、缩略图、类型筛选、排序与跨目录多选；可以对单文件明确确认后发布固定直链，浏览与撤销已有链接。系统设置仍负责 OAuth 配置及逐项操作教程；原 `/tools/onedrive` 匿名工具、`/r/odf_*`、R2/用户/UTC 功能全部保留。**无需新增 D1 迁移或 Secret**。详见 [RC14.8 使用及升级说明](docs/RC14_8_ONEDRIVE_BROWSER.md)。
+
 > **RC14.7 Microsoft OAuth 回调诊断修复：** 若之前出现 `OAUTH_CALLBACK_ERROR / OAUTH_FAILED`，新版会区分微软拒绝、账户类型、授权同意、回调 URI、Session 丢失及 Token 兑换错误。系统设置会显示**准确回调地址**，可选用 `MS_REDIRECT_URI` 固定自定义域名；无需变更 `MS_TOKEN_KEY` 或 D1。请看 [OAuth 回调排错和配置教程](docs/RC14_7_MICROSOFT_OAUTH_CALLBACK_FIX.md)。
 
 > **RC14.7 Microsoft OneDrive 配置热修复：** `MICROSOFT_TOKEN_KEY_MISSING` 现在会明确区分“当前 Worker 运行时未收到 MS_TOKEN_KEY”和“密钥格式不正确”。系统设置 → 站点设置 → Microsoft OneDrive 账户新增三项运行时配置检查和详细教程；修复内容、密钥生成方式及生产/预览绑定排查请看 [Microsoft OAuth 配置排错](docs/RC14_7_MICROSOFT_CONFIG_FIX.md)。升级不需要额外 D1 迁移，原有 `MS_TOKEN_KEY` 不应更换。
@@ -6,7 +20,7 @@
 
 > **RC13.5 运维更新：** 旧 CDN 链接重试退避、历史版本安全保留及清理、版本同步与容量仪表盘。详见 [RC13.5 运维文档](docs/RC13_5_OPERATIONS.md)。生产部署仍使用 `npm run build` / `npm run deploy`。
 
-# CloudDrive V1 RC13.4 — 网页版自动部署与在线编辑
+## 历史版本功能及部署说明
 
 > **RC13.4** 新增小型 UTF-8 文本在线编辑、Bootstrap 历史版本预览/下载/恢复、公开版本列表与同步管理。文件 ID、原有私密分享及 `/r/*` 永久链接保持不变。无需新增 D1 迁移或必需 Secret。详见 [RC13.4 使用与技术说明](docs/RC13_4_ONLINE_EDIT_AND_VERSIONS.md)。
 
@@ -17,7 +31,7 @@
 
 > RC13.1 更新：同名文件上传可覆盖并保留私密分享链接，支持独立历史修订与恢复。详细说明见 [`docs/RC13_1_REPLACEMENT.md`](docs/RC13_1_REPLACEMENT.md)。永久公开 CDN 同步在 RC13.2 实现。
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/biao169/cloudflare_disk)
+
 
 **源代码：** https://github.com/biao169/cloudflare_disk  
 **当前已有 Worker：** `cloudflare-disk`  
@@ -204,3 +218,16 @@ npm run db:backup:remote
 - [D1 foreign key 规则](https://developers.cloudflare.com/d1/sql-api/foreign-keys/)
 - [Wrangler 自动创建资源](https://developers.cloudflare.com/changelog/post/2025-10-24-automatic-resource-provisioning/)
 - [自动绑定与 D1 子命令兼容性问题](https://github.com/cloudflare/workers-sdk/issues/13632)
+
+
+## RC14.10 — OneDrive 文件夹、合集与批量发布
+
+在 **OneDrive 文件** (`/onedrive`) 中选择文件或文件夹，点击“创建分享 / 批量发布”，按三步确认创建。
+
+- 单文件夹静态快照或跨目录文件合集使用 `/s/odg_*` 公开浏览；内含文件沿用 `/s/odf_*` 预览页与 `/r/odf_*` 下载入口。
+- 最多 180 个目录项、8 层目录及 20 页 Graph 列表；批量独立发布最多 25 个文件。
+- **不会自动公开以后加入 OneDrive 文件夹的新文件。** 所有创建操作由超级管理员明确确认。
+- 后台可编辑合集标题和描述，撤销合集会停用该组专属的全部文件直链。
+- 升级需执行 D1 迁移 `0029_rc14_10_onedrive_groups.sql`，无需新增 Secret。
+
+详细部署和使用说明见 `docs/RC14_10_FOLDER_COLLECTION_BATCH.md`。

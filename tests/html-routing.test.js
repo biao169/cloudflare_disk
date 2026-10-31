@@ -24,7 +24,7 @@ function assetEnv(env) {
 
 test('HTML handling is explicit and cannot redirect login.html to the Worker login route',()=>{
   assert.equal(config.assets.html_handling,'none');
-  for(const path of ['/login','/setup','/files','/','/s/*']) assert.ok(config.assets.run_worker_first.includes(path),path);
+  for(const path of ['/login','/setup','/files','/onedrive','/','/s/*']) assert.ok(config.assets.run_worker_first.includes(path),path);
 });
 
 test('before D1 migrations, /login and /setup serve the actual HTML page without redirects',async()=>{
@@ -53,7 +53,9 @@ test('authenticated application HTML and public share HTML return 200 without ca
   const app=await worker.fetch(new Request('http://localhost:8787/files',{headers:{Cookie:cookie}}),env);
   assert.equal(app.status,200);
   assert.match(await app.text(),/<!doctype html>/i);
-  const share=await worker.fetch(new Request('http://localhost:8787/s/test-code'),env);
+  const oneDriveApp=await worker.fetch(new Request('http://localhost:8787/onedrive',{headers:{Cookie:cookie}}),env);
+ assert.equal(oneDriveApp.status,200);
+ const share=await worker.fetch(new Request('http://localhost:8787/s/test-code'),env);
   assert.equal(share.status,200);
   assert.match(await share.text(),/<!doctype html>/i);
 });

@@ -8,6 +8,6 @@ test('temporary URL validator blocks unsafe hosts, URLs and credentials',()=>{
 });
 test('cleanup uses bounded SQL and reports counts without raw identifiers',async()=>{
  const statements=[];const db={prepare(sql){statements.push(sql);return {bind(...args){assert.deepEqual(args,[100]);return {async run(){return {meta:{changes:4}};}};}};}};
- const result=await pruneOneDriveRecords(db);assert.deepEqual(result,{oauth_states:4,quota_counters:4});assert.equal(statements.length,2);
+ const result=await pruneOneDriveRecords(db);assert.deepEqual(result,{oauth_states:4,quota_counters:4,share_unlock_attempts:4,share_daily_stats:4,sync_events:4});assert.equal(statements.length,5);
 });
-test('cleanup batch size clamps to 200',async()=>{const seen=[];const db={prepare(){return {bind(...args){seen.push(...args);return {async run(){return {meta:{changes:0}}}}}}}};await pruneOneDriveRecords(db,{batchSize:9999});assert.deepEqual(seen,[200,200]);});
+test('cleanup batch size clamps to 200',async()=>{const seen=[];const db={prepare(){return {bind(...args){seen.push(...args);return {async run(){return {meta:{changes:0}}}}}}}};await pruneOneDriveRecords(db,{batchSize:9999});assert.deepEqual(seen,[200,200,200,200,200]);});

@@ -1,5 +1,8 @@
 import {driveFileAdminRoute} from '../services/onedrive-drive-files.js';
+import {adminSharePolicyRoute} from '../services/onedrive-share-policy.js';
+import {adminGroupRoute} from '../services/onedrive-groups.js';
 import {oneDriveOperationalStatus} from '../services/onedrive-maintenance.js';
+import {oneDriveSyncStatus,checkMicrosoftAuthorization,checkPublication} from '../services/onedrive-sync.js';
 import {startOAuth,finishOAuth,graphResolve,connectionStatus,disconnect,oauthErrorDetails} from '../services/onedrive-oauth.js';
 import {microsoftConfigErrorMessage} from '../services/microsoft-config.js';
 import {oneDriveStats} from '../services/onedrive-quota.js';
@@ -23,6 +26,8 @@ export async function adminRoute(req,env,path){
  if(user.role!=='super_admin'&&path==='/api/v1/admin/onedrive/oauth/callback')return oauthCallbackRedirect({code:'OAUTH_SESSION_LOST'});
  if(user.role!=='super_admin')return error('FORBIDDEN','仅超级管理员可操作',403);
  const db=dbFromEnv(env),method=req.method;
+ if(path.startsWith('/api/v1/admin/onedrive/shares'))return adminSharePolicyRoute(req,env,path,user.id);
+ if(path==='/api/v1/admin/onedrive/drive/batch-publish'||path.startsWith('/api/v1/admin/onedrive/groups'))return adminGroupRoute(req,env,path);
  if(path.startsWith('/api/v1/admin/onedrive/drive/'))return driveFileAdminRoute(req,env,path);
  if(path==='/api/v1/admin/onedrive/oauth/start'&&req.method==='GET'){
   try{return ok({authorization_url:await startOAuth(req,env,user.id)});}catch(e){const detail=microsoftConfigErrorMessage(e.message);const diagnostic=oauthErrorDetails(e);return error(detail?e.message:diagnostic.code,detail||diagnostic.message,503);}
@@ -46,6 +51,19 @@ export async function adminRoute(req,env,path){
    await audit(db,user.id,'settings.update','settings',null,{keys:Object.keys(values)});
    return ok(await settings(db));
   }
+ }
+ if(path==='/api/v1/admin/onedrive/sync/status'&&method==='GET')return ok({...await oneDriveSyncStatus(db),configuration:await settings(db)});
+ if(path==='/api/v1/admin/onedrive/sync/auth-check'&&method==='POST')return ok(await checkMicrosoftAuthorization(env));
+ if(path==='/api/v1/admin/onedrive/sync/run'&&method==='POST'){
+  const report=await runMaintenance(env,{source:'admin',actorId:user.id,tasks:['onedrive_sync'],forceSync:true});
+  await audit(db,user.id,'onedrive.sync.run','onedrive',null,{status:report.status});return ok(report);
+ }
+ const itemSync=/^\/api\/v1\/admin\/onedrive\/sync\/items\/(odf_[a-f0-9]{32})\/check$/.exec(path);
+ if(itemSync&&method==='POST'){
+  const row=await one(db,"SELECT * FROM onedrive_drive_publications WHERE id=? AND status=\'active\'",[itemSync[1]]);
+  if(!row)return error('NOT_FOUND','文件分享不存在',404);
+  const outcome=await checkPublication(env,row,{intervalHours:(await settings(db)).onedrive_sync_interval_hours});
+  await audit(db,user.id,'onedrive.sync.check','onedrive_file',itemSync[1],{status:outcome.status});return ok(outcome);
  }
  if(path==='/api/v1/admin/onedrive/stats'&&method==='GET')return ok({...await oneDriveStats(db),operations:await oneDriveOperationalStatus(db)});
  if(path==='/api/v1/admin/storage'&&method==='GET')return ok({...(await metrics(db)),settings:await settings(db)});

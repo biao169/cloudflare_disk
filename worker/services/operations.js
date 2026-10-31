@@ -1,4 +1,5 @@
 import {pruneOneDriveRecords} from './onedrive-maintenance.js';
+import {runOneDriveSynchronization} from './onedrive-sync.js';
 import {syncPendingPublications,pruneOldPublicVersions} from './public-versions.js';
 import {pruneFolderSync} from './folder-sync.js';
 import {prunePrivateVersions} from './version-retention.js';
@@ -43,7 +44,7 @@ export async function pruneAuthRecords(db,{batchSize=20}={}){
 
 // A single lease prevents an admin click and a Cron Trigger from both cleaning
 // the same objects. Bounded units keep work within Workers Free CPU/D1 budgets.
-export async function runMaintenance(env,{source='cron',actorId=null,tasks=['uploads','storage','trash','auth','publications','history','onedrive']}={}){
+export async function runMaintenance(env,{source='cron',actorId=null,forceSync=false,tasks=['uploads','storage','trash','auth','publications','history','onedrive','onedrive_sync']}={}){
  const db=dbFromEnv(env);
  const preferences=await settings(db);
  if(source==='cron'&&preferences.maintenance_paused)return {status:'skipped',reason:'MAINTENANCE_PAUSED'};
@@ -61,11 +62,13 @@ export async function runMaintenance(env,{source='cron',actorId=null,tasks=['upl
    ['auth',async()=>({...await pruneAuthRecords(db,{batchSize:20}),folder_sync:await pruneFolderSync(db,{limit:10})})],
    ['publications',async()=>({sync:await syncPendingPublications(env,{limit:1}),prune:await pruneOldPublicVersions(env,{limit:1})})],
    ['history',()=>prunePrivateVersions(env,{limit:1,keep:1,graceDays:7})],
-   ['onedrive',()=>pruneOneDriveRecords(db,{batchSize:100})]
+   ['onedrive',()=>pruneOneDriveRecords(db,{batchSize:100})],
+   ['onedrive_sync',()=>runOneDriveSynchronization(env,{force:forceSync})]
   ].filter(([name])=>tasks.includes(name))){
    try{summary[name]=await fn();
     const pending=Number(summary[name]?.failed||0) > 0 || (name==='storage'&&Number(summary[name]?.attempted)>Number(summary[name]?.cleaned)) ||
-     (name==='uploads'&&Number(summary[name]?.pending)>0) || (name==='publications'&&Number(summary[name]?.sync?.remaining)>0);
+     (name==='uploads'&&Number(summary[name]?.pending)>0) || (name==='publications'&&Number(summary[name]?.sync?.remaining)>0) ||
+     (name==='onedrive_sync'&&summary[name]?.status==='partial');
     if(pending){failures.push(name);await recordIncident(env,{source:'maintenance.'+name,code:'MAINTENANCE_BATCH_PARTIAL',level:'warning'});}
    }
    catch(e){summary[name]={failed:true};failures.push(name);console.error('RC9 maintenance task failed',name,e);await recordIncident(env,{source:'maintenance.'+name,code:'MAINTENANCE_STEP_FAILED'});}

@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN" data-bs-theme="light">
+<head>
+ <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+ <meta name="referrer" content="no-referrer"><meta name="description" content="CloudDrive OneDrive 文件分享与在线预览">
+ <title>OneDrive 文件分享 · CloudDrive</title>
+ <link rel="stylesheet" href="/vendor/bootstrap/bootstrap.min.css">
+ <link rel="stylesheet" href="/css/onedrive-share.css">
+</head>
+<body>
+ <div class="ods-shell">
+  <header class="ods-top"><a class="ods-brand" href="/">☁ <span>CloudDrive</span></a><span class="ods-top-badge">OneDrive 分享</span></header>
+  <main class="ods-main">
+   <div id="ods-access" aria-live="polite"></div>
+   <div id="ods-state" role="status" class="ods-loading">正在获取分享信息…</div>
+   <article id="ods-content" class="ods-card" hidden>
+    <div class="ods-cover ods-theme-auto" id="ods-cover"><span class="ods-cover-icon" id="ods-cover-icon" aria-hidden="true">▣</span><img id="ods-cover-image" alt="文件封面" hidden></div>
+    <div class="ods-body">
+     <div class="ods-eyebrow" id="ods-type">OneDrive 文件</div>
+     <h1 id="ods-title"></h1>
+     <p id="ods-description" class="ods-description" hidden></p>
+     <div id="ods-metadata" class="ods-metadata"></div>
+     <div class="ods-actions">
+      <a id="ods-download" class="ods-button ods-primary" href="#">下载文件</a>
+      <button id="ods-preview-toggle" class="ods-button ods-secondary" type="button">在线预览</button>
+     </div>
+     <div id="ods-preview" class="ods-preview" hidden><div class="ods-preview-heading"><h2>文件预览</h2><button id="ods-preview-close" type="button" aria-label="关闭预览">关闭</button></div><div id="ods-preview-media"></div><p class="ods-help">预览来自原始 OneDrive 文件；部分文件格式或浏览器可能不支持。</p></div>
+     <div id="ods-message" role="status" aria-live="polite" class="ods-message" hidden></div>
+     <div class="ods-share-tools">
+      <button type="button" id="ods-copy-page">复制分享页链接</button>
+      <button type="button" id="ods-copy-direct">复制下载直链</button>
+      <button type="button" id="ods-qr-toggle">显示二维码</button>
+     </div>
+     <section id="ods-qr-panel" class="ods-qr-panel" hidden aria-label="分享二维码"><div id="ods-qr-image"></div><p>扫码打开此分享页面</p><button id="ods-qr-save" type="button" class="ods-button ods-secondary">保存二维码 SVG</button></section>
+    </div>
+   </article>
+  </main>
+  <footer class="ods-footer">文件保存在 OneDrive · 固定入口由 CloudDrive 提供 · 分享被撤销或授权失效后可能无法访问</footer>
+ </div>
+ <script type="module" src="/js/onedrive-share.js"></script>
+</body>
+</html>

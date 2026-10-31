@@ -1,5 +1,6 @@
 import {addMicrosoftOauthNotice} from '../utils/microsoft-oauth-feedback.js';
 import {requestJSON} from '../api.js';
+import {renderOneDriveSyncSettings} from '../components/onedrive-sync-panel.js';
 const el=(tag,text='',cls='')=>{const x=document.createElement(tag);x.textContent=text;x.className=cls;return x;};
 const hint=(container,value)=>container.append(el('p',value,'small text-secondary mb-2'));
 const button=(label,fn)=>{const b=el('button',label,'btn btn-outline-primary btn-sm me-2 mb-2');b.type='button';b.onclick=async()=>{b.disabled=true;try{await fn();}catch(e){alert(e.message||'请求失败');}finally{b.disabled=false;}};return b;};
@@ -16,6 +17,8 @@ export async function addOneDriveSettings(host){const card=el('section','','card
  ['6. 自行生成 MS_TOKEN_KEY','这个密钥并非微软提供。使用 32 字节加密安全随机值，推荐填写 64 个十六进制字符；也支持 32 字节的 Base64。不要填写 Microsoft 客户端密码、Secret ID、SHARE_LINK_KEY 或字符串占位符。密钥用于 AES-256-GCM 加密 D1 中的 OAuth Token，换密钥会导致旧令牌无法解密，需重新授权。'],
  ['7. 在正确的 Cloudflare Worker 中配置','Cloudflare Dashboard → Workers & Pages → 当前实际部署的 Worker → Settings → Variables and Secrets。添加 MS_CLIENT_ID、MS_CLIENT_SECRET、MS_TOKEN_KEY；敏感值用 Secret。个人及组织账户可用 MS_TENANT=common；仅个人账号可用 consumers。若存在多个访问域名，建议额外设置 MS_REDIRECT_URI 为唯一的 HTTPS 回调地址，并始终从该域名发起授权。更新后重新部署。'],
  ['8. 检查与授权','先核对下方的“当前授权回调地址”，将它原样填入 Microsoft Entra 的 Web 重定向 URI。再确认应用的支持账户类型包含当前 OneDrive 账号、Graph 委托权限可被同意，然后点击“连接 Microsoft 账户”。若微软返回 AADSTS 错误，本程序会显示简化后的原因；不要分享包含 code/state 的回调 URL。'],
+ ['10. OneDrive 文件同步','管理员可在系统设置下方开关同步检查、Delta 增量监听，调整每次检查数量与间隔。Cron 以 UTC 执行；首次仅建立 Delta 基线，不自动发布新文件。'],
+ ['11. 独立文件管理入口','账户连接成功后，可从左侧导航进入“OneDrive 文件”（/onedrive），使用网格/列表、全盘搜索、分页、文件夹导航、单文件直链发布及已发布链接管理。此页面仅限超级管理员；访客使用的 OneDrive 分享链接解析工具仍在 /tools/onedrive。'],
  ['9. 发布固定直链','部署并应用已有迁移 0025 和 0027；管理员完成微软授权后浏览“我的文件”，选择文件并明确确认公开，再获取 /r/odf_* 固定直链。文件若被删除、管理员授权失效或微软限流，固定入口也可能无法下载。']
  ];
  for(const [t,d] of help){steps.append(el('div',t,'fw-semibold small mt-2'));hint(steps,d);}
@@ -28,6 +31,7 @@ finally { $rng.Dispose() }`,'small bg-body-tertiary p-2 rounded text-break');ste
  const status=el('div','正在读取连接状态…','small mb-2');body.append(status);
  const configPanel=el('div','','mb-3');body.append(configPanel);
  const controls=el('div','','mb-3');body.append(controls);
+ await renderOneDriveSyncSettings(body);
  const filePanel=el('div','','border rounded p-3 mb-3');body.append(filePanel);filePanel.hidden=true;
  const shares=el('div','','border rounded p-3');body.append(shares);shares.hidden=true;
  async function refresh(){
@@ -59,7 +63,7 @@ finally { $rng.Dispose() }`,'small bg-body-tertiary p-2 rounded text-break');ste
   const connect=button('连接 Microsoft 账户',async()=>{const x=await requestJSON('/api/v1/admin/onedrive/oauth/start');location.assign(x.authorization_url);});
   connect.disabled=!r.configured;controls.append(connect);
   if(r.connected){
-   if(r.configured){controls.append(button('浏览已授权文件',()=>browse('root')));controls.append(button('查看已发布直链',loadPublications));}
+   if(r.configured){controls.append(button('打开 OneDrive 文件管理',()=>location.assign('/onedrive')));}
    controls.append(button('断开账户',async()=>{if(!confirm('断开 Microsoft 账户？已发布直链将无法下载，直到重新授权。'))return;await requestJSON('/api/v1/admin/onedrive/oauth',{method:'DELETE'});filePanel.hidden=true;shares.hidden=true;await refresh();}));
   }
  }

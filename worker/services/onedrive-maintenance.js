@@ -4,7 +4,10 @@ export async function pruneOneDriveRecords(db,{batchSize=100}={}) {
  const limit=Math.max(1,Math.min(200,Math.trunc(Number(batchSize))||100));
  const jobs=[
   ['oauth_states',`DELETE FROM onedrive_oauth_states WHERE state IN (SELECT state FROM onedrive_oauth_states WHERE expires_at < CAST(strftime('%s','now') AS INTEGER) ORDER BY expires_at LIMIT ?)`],
-  ['quota_counters',`DELETE FROM onedrive_quota_counters WHERE rowid IN (SELECT rowid FROM onedrive_quota_counters WHERE (window_name='minute' AND window_slot < CAST(strftime('%s','now') AS INTEGER)/60-3) OR (window_name='hour' AND window_slot < CAST(strftime('%s','now') AS INTEGER)/3600-2) OR (window_name='day' AND window_slot < CAST(strftime('%s','now') AS INTEGER)/86400-2) LIMIT ?)`]
+  ['quota_counters',`DELETE FROM onedrive_quota_counters WHERE rowid IN (SELECT rowid FROM onedrive_quota_counters WHERE (window_name='minute' AND window_slot < CAST(strftime('%s','now') AS INTEGER)/60-3) OR (window_name='hour' AND window_slot < CAST(strftime('%s','now') AS INTEGER)/3600-2) OR (window_name='day' AND window_slot < CAST(strftime('%s','now') AS INTEGER)/86400-2) LIMIT ?)`],
+  ['share_unlock_attempts',`DELETE FROM onedrive_share_unlock_attempts WHERE rowid IN (SELECT rowid FROM onedrive_share_unlock_attempts WHERE window_id < CAST(strftime('%s','now') AS INTEGER)/900-2 LIMIT ?)`],
+  ['share_daily_stats',`DELETE FROM onedrive_share_daily_stats WHERE rowid IN (SELECT rowid FROM onedrive_share_daily_stats WHERE utc_day < date('now','-90 days') LIMIT ?)`],
+  ['sync_events',`DELETE FROM onedrive_sync_events WHERE id IN (SELECT id FROM onedrive_sync_events WHERE created_at < datetime('now','-90 days') ORDER BY created_at LIMIT ?)`]
  ];
  const result={};for(const [name,sql] of jobs){const r=await execute(db,sql,[limit]);result[name]=r.meta?.changes||0;}
  return result;
