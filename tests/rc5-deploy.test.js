@@ -47,7 +47,7 @@ async function simulate({options={},mode='auto'}={}) {
 
 test('existing D1 is migrated and checked BEFORE activating new Worker, never reprovisioned', async()=>{
  const x=await simulate();
- assert.deepEqual(x.calls.map(c=>c.command.split(' --config')[0]).map(c=>c.split(' ').slice(0,3).join(' ')),['d1 list --json','d1 migrations apply','d1 execute DB','deploy']);
+ assert.deepEqual(x.calls.map(c=>c.command.split(' --config')[0]).map(c=>c.split(' ').slice(0,3).join(' ')),['d1 list --json','d1 migrations apply','d1 execute DB','deploy --keep-vars']);
  assert.equal(x.calls.filter(c=>c.command.startsWith('deploy ')).length,1);
  assert.equal(x.calls.find(c=>c.command.startsWith('d1 migrations apply')).config.d1_databases[0].database_id,id);
  assert.equal(x.remaining.length,0);
@@ -111,4 +111,15 @@ test('backup-only resolves correct remote D1 and exports locally without migrati
   assert.equal(h.calls.some(c=>c.command.startsWith('d1 migrations apply')),false);
   assert.equal(h.calls.some(c=>c.command.startsWith('d1 export')),true);
  } finally {h.cleanup();}
+});
+
+test('Wrangler auto-deploy always preserves dashboard Text vars such as MS_CLIENT_ID',async()=>{
+ const x=await simulate();
+ const deploy=x.calls.find(c=>c.command.startsWith('deploy '));
+ assert.equal(deploy.config.keep_vars,true);
+ assert.match(deploy.command,/deploy --keep-vars --config/);
+ const first=await simulate({options:{existing:false}});
+ for(const c of first.calls.filter(c=>c.command.startsWith('deploy '))){
+  assert.equal(c.config.keep_vars,true);assert.match(c.command,/--keep-vars/);
+ }
 });

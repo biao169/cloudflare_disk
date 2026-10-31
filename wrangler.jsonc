@@ -2,6 +2,7 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "cloudflare-disk",
   "main": "./worker/index.js",
+  "keep_vars": true,
   "compatibility_date": "2026-10-22",
   "assets": {
     "directory": "./public",

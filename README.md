@@ -1,3 +1,5 @@
+> **RC14.12 下载与部署热修复（2026-10-31）：** `wrangler.jsonc` 设置 `keep_vars: true`，自动部署脚本也会在生成的临时配置中启用 `keep_vars` 并追加 `--keep-vars`，以保留 Cloudflare 网页后台填写的普通 Text 环境变量（如 `MS_CLIENT_ID`）。现有 Microsoft Secrets 不需要更换。OneDrive `/r/odf_*` 下载增加显式 Graph 临时直链请求、旧接口兼容、无重定向时的 `/content` 流式回退和具体故障代码，并支持管理员“诊断下载”。R2、OneDrive 文件夹和公开合集支持双击行/卡片非操作区域打开，原“打开”按钮保留。**不需要新增 D1 迁移。** 详见 [部署及下载修复教程](docs/RC14_12_DOWNLOAD_DEPLOY_FIX.md)。
+
 > **RC14.12 OneDrive 文件同步与运维：** 已公开 OneDrive 文件支持 Graph Delta 增量检测、eTag 条件查询、小批次健康检查、微软限流退避、授权状态诊断，以及后台“同步与运维”面板。同步只检查已发布来源，**不会自动公开文件、复制到 R2 或变更旧固定直链**。新增 `0031_rc14_12_onedrive_sync.sql` 迁移，适配有历史分享记录的数据库；默认沿用 6 小时 UTC Cron 和每批 8 文件。无新增强制 Secret。部署、设置项下方教程及注意事项见 [RC14.12 配置与运维说明](docs/RC14_12_ONEDRIVE_SYNC_OPERATIONS.md)。
 
 > **RC14.11 OneDrive 分享权限与统计：** 已发布文件及文件夹/合集现在支持分享暂停与恢复、访问密码、指定到期时间、仅 CloudDrive 登录用户访问、浏览/下载跳转次数限制、权限继承与后台统计（最近 30 天）。修改权限后旧密码解锁 Cookie 立即失效；原有 `/s/odf_*`、`/r/odf_*` 和 `/s/odg_*` 不变。**需新增 D1 迁移** `0030_rc14_11_onedrive_share_controls.sql`，无强制新增 Secret。详见 [RC14.11 使用说明](docs/RC14_11_ONEDRIVE_SHARE_POLICY.md)。

@@ -1,4 +1,5 @@
 import {requestJSON} from '../api.js';
+import {bindFolderDoubleClick} from '../utils/folder-open.js';
 const E=(t,c='',text)=>{const e=document.createElement(t);e.className=c;if(text!==undefined)e.textContent=text;return e};
 const notice=(host,message,kind='info')=>{const m=E('div',`alert alert-${kind} py-2`,message);host.prepend(m);setTimeout(()=>m.remove(),5000)};
 export async function renderSpaces(host,onlyPersonal=false){
@@ -17,7 +18,7 @@ export async function renderSpaces(host,onlyPersonal=false){
  const folderForm=E('form','d-flex gap-2 mb-3'),folderName=E('input','form-control');folderName.placeholder='新建文件夹';folderName.required=true;folderName.maxLength=100;const create=E('button','btn btn-outline-primary','新建文件夹');folderForm.append(folderName,create);body.append(folderForm);
  const foldersHost=E('div','mb-4');body.append(foldersHost);let folderParent=null;
  async function displayFolders(){const url=`/api/v1/spaces/${s.id}/contents`+(folderParent?'?parent_id='+encodeURIComponent(folderParent):'');const r=await requestJSON(url);foldersHost.replaceChildren();const back=E('button','btn btn-sm btn-link px-0 mb-2','返回根目录');back.onclick=()=>{folderParent=null;displayFolders()};if(folderParent)foldersHost.append(back);
- for(const f of r.folders){const item=E('div','d-flex justify-content-between align-items-center border-bottom py-2');const b=E('button','btn btn-sm btn-link text-start','📁 '+f.name);b.onclick=()=>{folderParent=f.id;displayFolders()};item.append(b);
+ for(const f of r.folders){const item=E('div','d-flex justify-content-between align-items-center border-bottom py-2');const b=E('button','btn btn-sm btn-link text-start','📁 '+f.name);b.onclick=()=>{folderParent=f.id;displayFolders()};item.append(b);bindFolderDoubleClick(item,()=>{folderParent=f.id;void displayFolders()});
  if(s.membership_role==='owner'||s.membership_role==='admin'){const acl=E('button','btn btn-sm btn-outline-secondary','权限');acl.onclick=()=>editPermissions(f);item.append(acl)}foldersHost.append(item)}
  if(!r.folders.length)foldersHost.append(E('p','text-muted small','当前目录暂无文件夹'));}
  folderForm.onsubmit=async e=>{e.preventDefault();try{await requestJSON('/api/v1/folders',{method:'POST',body:{space_id:s.id,parent_id:folderParent,name:folderName.value}});folderName.value='';await displayFolders()}catch(err){notice(host,err.message,'danger')}};

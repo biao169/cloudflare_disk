@@ -1,6 +1,7 @@
 // RC14.8 - OneDrive explorer. All Microsoft calls run through admin-only Worker APIs.
 import {requestJSON} from '../api.js';
 import {formatUtc} from '../utils/time.js';
+import {bindFolderDoubleClick} from '../utils/folder-open.js';
 import {openShareWizard,openGroupEditor} from '../components/onedrive-share-wizard.js';
 import {openSharePolicyDialog,renderShareAnalytics} from '../components/onedrive-share-policy.js';
 import {renderOneDriveSyncDashboard,syncLabel} from '../components/onedrive-sync-panel.js';
@@ -82,15 +83,17 @@ export async function renderOneDriveBrowser(host){
  if(typeof IntersectionObserver!=='undefined')observer=new IntersectionObserver(entries=>{for(const e of entries){if(e.isIntersecting){observer.unobserve(e.target);queueThumbnail(e.target.dataset.item);}}},{rootMargin:'120px'});
  function checkbox(item){const ch=el('input','form-check-input od-check');ch.type='checkbox';ch.checked=selected.has(item.id);ch.setAttribute('aria-label',`选择 ${item.name}`);ch.addEventListener('change',()=>{if(ch.checked)selected.set(item.id,item);else selected.delete(item.id);draw();});return ch;}
  function makeCard(item){const card=el('article','od-card');const thumb=displayImage(item);card.append(thumb);
-  const label=el('div','od-card-name text-break',item.name);label.title=item.name;card.append(label);
+  const label=el('div','od-card-name text-break',item.name);label.title=item.name;
+  if(item.folder){label.tabIndex=0;label.setAttribute('aria-label',`打开文件夹 ${item.name}`);label.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();folder(item);}});}card.append(label);
   card.append(el('div','small text-secondary',item.folder?'文件夹 · '+(item.child_count??'—')+' 项':bytes(item.size)));
   card.append(el('div','small text-secondary od-date',formatUtc(item.updated_at)));
   const actions=el('div','od-actions');actions.append(checkbox(item));actions.append(btn(item.folder?'打开':'发布直链',()=>item.folder?folder(item):void publish(item),'btn btn-outline-primary btn-sm'));
-  card.append(actions);return card;}
+  card.append(actions);if(item.folder)bindFolderDoubleClick(card,()=>folder(item));return card;}
  function makeRow(item){const row=el('div','od-list-row');row.append(checkbox(item));const thumb=displayImage(item);row.append(thumb);
-  const text=el('div','od-list-name');text.append(el('div','fw-semibold text-break',item.name),el('div','small text-secondary',item.folder?'文件夹':item.mime_type||'文件'));
+  const text=el('div','od-list-name');const fileName=el('div','fw-semibold text-break',item.name);
+  if(item.folder){fileName.tabIndex=0;fileName.setAttribute('aria-label',`打开文件夹 ${item.name}`);fileName.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();folder(item);}});}text.append(fileName,el('div','small text-secondary',item.folder?'文件夹':item.mime_type||'文件'));
   row.append(text,el('div','small text-secondary od-list-size',item.folder?'—':bytes(item.size)),el('div','small text-secondary od-list-date',formatUtc(item.updated_at)),btn(item.folder?'打开':'发布直链',()=>item.folder?folder(item):void publish(item),'btn btn-outline-primary btn-sm'));
-  return row;}
+  if(item.folder)bindFolderDoubleClick(row,()=>folder(item));return row;}
  function draw(){if(!alive())return;
   observer?.disconnect();
   gridBtn.classList.toggle('active',view==='grid');listBtn.classList.toggle('active',view==='list');
@@ -180,7 +183,7 @@ export async function renderOneDriveBrowser(host){
      const directCopy=btn('复制直链',async()=>{try{await navigator.clipboard.writeText(shareUrl(item.url));say('下载直链已复制。','success');}catch{say('复制失败，请检查浏览器权限。');}});
      const edit=btn('编辑展示',()=>void editPresentation(item),'btn btn-sm btn-outline-primary');
      const revoke=btn('撤销',async()=>{if(!confirm(`确定撤销“${item.file_name}”？分享页面和下载直链将同时失效。`))return;try{await requestJSON(`${api}/publications/${item.id}`,{method:'DELETE'});await loadPublications();}catch(e){say(messageFor(e),'danger');}},'btn btn-sm btn-outline-danger');
-     const permissions=btn('权限与统计',()=>void openSharePolicyDialog(host,item,{onSaved:()=>loadPublications()}),'btn btn-sm btn-outline-primary');const health=btn('检查来源',async()=>{try{const r=await requestJSON(`/api/v1/admin/onedrive/sync/items/${item.id}/check`,{method:'POST'});say(`检查完成：${syncLabel(r.status)}${r.changed?'（文件内容已更新）':''}`,'info');await loadPublications();}catch(e){say(messageFor(e),'danger');}});actions.append(open,pageCopy,directCopy,edit,permissions,health,revoke);line.append(actions);
+     const permissions=btn('权限与统计',()=>void openSharePolicyDialog(host,item,{onSaved:()=>loadPublications()}),'btn btn-sm btn-outline-primary');const diagnose=btn('诊断下载',async()=>{try{const info=await requestJSON(`${api}/publications/${item.id}/download-diagnostic`);say(info.available?`下载接口可用：${info.method}。${info.note||''}`:`下载诊断：${info.message||info.code}（${info.code}）${info.upstream_status?' · Microsoft HTTP '+info.upstream_status:''}` ,info.available?'success':'warning');}catch(e){say(messageFor(e),'danger');}});const health=btn('检查来源',async()=>{try{const r=await requestJSON(`/api/v1/admin/onedrive/sync/items/${item.id}/check`,{method:'POST'});say(`检查完成：${syncLabel(r.status)}${r.changed?'（文件内容已更新）':''}`,'info');await loadPublications();}catch(e){say(messageFor(e),'danger');}});actions.append(open,pageCopy,directCopy,edit,permissions,diagnose,health,revoke);line.append(actions);
     }pubs.append(line);
    }
   }catch(e){if(alive())pubs.replaceChildren(el('div','alert alert-danger',messageFor(e)));}

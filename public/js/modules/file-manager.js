@@ -1,4 +1,5 @@
 import {formatUtc} from '../utils/time.js';
+import {bindFolderDoubleClick} from '../utils/folder-open.js';
 import {chooseUploadConflict} from '../components/replace-conflict.js';
 import {canEditText,openTextEditor} from '../components/text-editor.js';
 import {openVersionDialog} from '../components/version-dialog.js';
@@ -120,12 +121,14 @@ export async function renderFileManager(host,mode='files'){
   row.append(el('td','text-secondary small text-nowrap',item.kind==='file'?size(item.size_bytes):'—'));
   row.append(el('td','text-secondary small text-nowrap',date(item.updated_at||item.created_at)));
   row.append(el('td','text-secondary small',aggregated?(item.space_name||'共享空间'):'—'));
-  const acts=el('td');acts.append(actionButtons(item));row.append(acts);return row;
+  const acts=el('td');acts.append(actionButtons(item));row.append(acts);
+  if(item.kind==='folder')bindFolderDoubleClick(row,()=>aggregated?locateItem(item):openFolder(item));return row;
  }
  function makeGrid(item){const card=el('div','cd-file-card border rounded-3 p-3');const head=el('div','d-flex gap-2 align-items-start');head.append(el('div','fs-3',fileIcon(item)));
   const check=checkbox(item);head.append(el('div','ms-auto'),check);const name=itemButton(item);name.classList.add('fw-semibold','w-100');
   const meta=el('div','small text-secondary mt-1',`${item.kind==='file'?size(item.size_bytes):'文件夹'} · ${date(item.updated_at||item.created_at)}`);
-  card.append(head,name,meta);if(aggregated)card.append(el('div','small text-secondary',item.space_name||''));card.append(actionButtons(item));return card;
+  card.append(head,name,meta);if(aggregated)card.append(el('div','small text-secondary',item.space_name||''));card.append(actionButtons(item));
+  if(item.kind==='folder')bindFolderDoubleClick(card,()=>aggregated?locateItem(item):openFolder(item));return card;
  }
  async function load(){if(!isAlive())return;const run=++seq;message.replaceChildren();itemsBox.replaceChildren(el('div','p-4 text-secondary','正在读取文件…'));
   try{

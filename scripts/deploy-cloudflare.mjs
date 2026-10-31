@@ -96,6 +96,9 @@ export function extractTables(json) {
 
 export function makeWranglerConfig(config, id = null) {
   const copy = structuredClone(config);
+  // Preserve Text variables added in Cloudflare dashboard even if the source config predates this flag.
+  // Secrets are always kept by Wrangler; never read or embed any remote Secret value here.
+  copy.keep_vars = true;
   copy.d1_databases = copy.d1_databases.map(db => db.binding === 'DB'
     ? { ...db, ...(id ? { database_id: id } : {}) } : db);
   if (!id) delete copy.d1_databases.find(db => db.binding === 'DB').database_id;
@@ -163,7 +166,7 @@ export async function deployCloudDrive({
       if (['upgrade','migrate-only','list-migrations','backup-only'].includes(mode)) throw new Error('未找到现有 D1，升级/迁移操作禁止新建数据库。');
       logger.log('[CloudDrive] Cloudflare 中尚无目标 D1。首次执行 Worker 部署以自动创建 D1/R2。');
       write(null);
-      call(['deploy', ...configArgs]);
+      call(['deploy', '--keep-vars', ...configArgs]);
       id = resolveDatabaseId(list(), db.database_name);
       if (!id) throw new Error('Worker 已提交但远程 D1 未创建成功；停止后续操作，不允许假报部署成功。');
     } else {
@@ -185,7 +188,7 @@ export async function deployCloudDrive({
     call(['d1','migrations','apply','DB','--remote',...configArgs]);
     verify();
     if (mode !== 'migrate-only') {
-      call(['deploy',...configArgs]);
+      call(['deploy','--keep-vars',...configArgs]);
       logger.log('[CloudDrive] Worker 代码已发布，D1 迁移已验证。首次使用请设置 BOOTSTRAP_TOKEN 后进入 /setup。');
     } else {
       logger.log('[CloudDrive] 仅数据库迁移成功；Worker 代码未重新部署。');

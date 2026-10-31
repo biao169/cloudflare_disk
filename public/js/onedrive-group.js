@@ -1,6 +1,7 @@
 import {requestShareMetadata} from './onedrive-share-access.js';
 // Anonymous static snapshot browser: D1 metadata only, no Graph credentials or URL.
 import {formatUtc} from './utils/time.js';
+import {bindFolderDoubleClick} from './utils/folder-open.js';
 import {qrSvg} from './vendor/qr-code.js';
 const id=location.pathname.match(/^\/s\/(odg_[a-f0-9]{32})$/)?.[1];
 const get=x=>document.getElementById('odg-'+x);
@@ -25,7 +26,7 @@ function render(){if(!group)return;
   const meta=make('div','odg-fileinfo');const name=make('div','odg-name',item.name);meta.append(name);
   const sub=make('div','odg-filemeta',item.type==='folder'?'文件夹':[detailSize(item.size),item.updated_at?formatUtc(item.updated_at):null].filter(Boolean).join(' · '));meta.append(sub);
   const actions=make('div','odg-actions');
-  if(item.type==='folder'){const open=make('button','odg-action odg-open','打开');open.type='button';open.onclick=()=>go(item.id);actions.append(open);line.classList.add('odg-is-folder');}
+  if(item.type==='folder'){const open=make('button','odg-action odg-open','打开');open.type='button';open.onclick=()=>go(item.id);actions.append(open);line.classList.add('odg-is-folder');bindFolderDoubleClick(line,()=>go(item.id));}
   else{
    for(const [label,path,primary] of [['预览',item.share_url,false],['下载',item.download_url,true]]){const a=make('a',`odg-action ${primary?'odg-download':''}`,label);a.href=path;a.rel='noopener noreferrer';if(!primary)a.target='_blank';actions.append(a);}
   }

@@ -149,3 +149,9 @@ body { margin:0; font-family:system-ui,-apple-system,"Microsoft YaHei",sans-seri
 @media(max-width:620px){.od-editor-form{padding:15px}.od-editor{max-height:96vh}.od-pub-row{align-items:flex-start;flex-direction:column}}
 /* RC14.10: folder/collection publication wizard and per-item batch results */
 .od-wizard .od-wizard-body{max-height:48vh;overflow:auto}.od-batch-result{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;padding:8px 0;border-bottom:1px solid var(--edge)}.od-batch-result:last-child{border-bottom:0}.od-batch-result>span{overflow-wrap:anywhere}.od-wizard .form-check-input{flex:none}
+
+/* RC14.12 folder navigation: double-click the non-action area to enter a folder. */
+.cd-folder-dblclick { cursor: default; }
+.cd-folder-dblclick:hover { background-color: rgba(34, 110, 185, .045); }
+.od-card.cd-folder-dblclick .od-card-name, .od-list-row.cd-folder-dblclick .od-list-name { cursor: pointer; }
+.cd-folder-dblclick [tabindex="0"]:focus-visible { outline: 2px solid #3b82f6; outline-offset: 3px; border-radius: 3px; }
