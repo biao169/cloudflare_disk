@@ -40,7 +40,23 @@ export function mountFolderTree(host,{spaceId,spaceName,onNavigate}){
  void load(root);
  return {
   select,
-  async expandPath(path){for(const f of path){const parent=nodes.get(f.parent_id??'root');if(parent){if(parent.loading)await parent.loading;else if(!parent.loaded)await load(parent);parent.expanded=true;parent.kids.hidden=false;parent.exp.textContent='▾';} }select(path.at(-1)?.id??null)},
+  async expandPath(path){
+   // A folder can be on a later page of its parent's children. Materialize
+   // only the ancestors needed to reveal the requested folder in either view.
+   let parent=nodes.get('root');
+   for(const f of path||[]){
+    if(disposed||!parent)break;
+    parent.expanded=true;parent.kids.hidden=false;parent.exp.textContent='▾';
+    if(parent.loading)await parent.loading;
+    else if(!parent.loaded)await load(parent);
+    let child=nodes.get(f.id),pages=0;
+    while(!disposed&&!child&&parent.hasMore&&pages++<30){
+     await load(parent);child=nodes.get(f.id);
+    }
+    parent=child;
+   }
+   if(!disposed)select(path?.at(-1)?.id??null);
+  },
   refresh(){nodes.clear();tree.replaceChildren();const refreshed=makeItem(null,spaceName,0,tree);refreshed.expanded=true;refreshed.exp.textContent='▾';refreshed.kids.hidden=false;void load(refreshed);select(selected)},
   dispose(){disposed=true;host.replaceChildren()}
  };

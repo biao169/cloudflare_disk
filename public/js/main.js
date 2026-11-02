@@ -20,7 +20,7 @@ function render() {
  host.dataset.fileView='';host.dataset.searchView='';host.dataset.odBrowser='';
  const key=page();document.title=`${titles[key]} · CloudDrive`;document.getElementById('topbar-title').textContent=titles[key];
  document.querySelectorAll('#app-nav [data-route], .app-nav [data-route]').forEach(a=>{const active=a.dataset.route===key;a.classList.toggle('active',active);if(active)a.setAttribute('aria-current','page');else a.removeAttribute('aria-current')});
- if(key==='personal'||key==='spaces')renderSpaces(host,key==='personal');else if(['files','recent','favorites'].includes(key))renderFileManager(host,key);else if(key==='search')renderGlobalSearch(host);else if(key==='users')renderUsers(host);else if(key==='shares')renderShares(host);else if(key==='trash')renderTrash(host);else if(key==='settings')renderAdmin(host);else if(key==='onedrive')void renderOneDriveBrowser(host);else renderPlaceholder(host,key);
+ if(key==='spaces')renderSpaces(host,false);else if(['files','personal','recent','favorites'].includes(key))void renderFileManager(host,key);else if(key==='search')renderGlobalSearch(host);else if(key==='users')renderUsers(host);else if(key==='shares')renderShares(host);else if(key==='trash')renderTrash(host);else if(key==='settings')renderAdmin(host);else if(key==='onedrive')void renderOneDriveBrowser(host);else renderPlaceholder(host,key);
  closeMenu();
 }
 document.addEventListener('click',e=>{const a=e.target.closest('a[data-route]');if(!a || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey)return;e.preventDefault();const target=new URL(a.href,location.href);if(target.origin!==location.origin)return;history.pushState({},'',target.pathname+target.search);render();});

@@ -10,6 +10,7 @@ import {openPreview,canPreview} from './preview.js';
 import {pickFolder,askName} from '../components/folder-picker.js';
 import {openShareDialog} from '../components/share-dialog.js';
 import {mountFolderTree} from '../components/folder-tree.js';
+import {openFolderPermissions} from '../components/folder-permissions.js';
 import {enableDragUpload,safeUploadPath} from '../components/drag-upload.js';
 import {taskProgress} from '../components/task-progress.js';
 
@@ -22,6 +23,12 @@ const btn=(text,fn,cls='btn btn-sm btn-outline-secondary')=>{const b=el('button'
 const option=(value,label)=>{const o=el('option','',label);o.value=value;return o};
 const isUuid=id=>typeof id==='string'&&/^[a-f0-9-]{36}$/.test(id);
 const BATCH=10; // Keep Worker Free requests short; backend allows up to 20.
+
+// Both /files and /personal deliberately share this explorer. Never let the personal
+// entry point select a team space, even if a team was returned first by the API.
+export const spacesForExplorer=(spaces,mode='files')=>
+ Array.isArray(spaces)?spaces.filter(s=>mode!=='personal'||s.type==='personal'):[];
+export const explorerLocationKey=mode=>mode==='personal'?'cd-last-personal-folder':'cd-last-folder';
 const downloadable=item=>item.kind==='file';
 
 // Native download: the browser handles streaming and Range requests. No JS Blob or RAM-sized buffering.
@@ -35,15 +42,15 @@ function matchesType(x,filter){if(filter==='all')return true;if(x.kind==='folder
 }
 
 export async function renderFileManager(host,mode='files'){
- const recent=mode==='recent',favorites=mode==='favorites',aggregated=recent||favorites,viewId=crypto.randomUUID();host.dataset.fileView=viewId;
+ const recent=mode==='recent',favorites=mode==='favorites',personal=mode==='personal',aggregated=recent||favorites,viewId=crypto.randomUUID();host.dataset.fileView=viewId;host.dataset.fileScope=personal?'personal':'all';
  host.replaceChildren();const isAlive=()=>host.isConnected&&host.dataset.fileView===viewId;
  const heading=el('div','d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3');
- const title=el('div');title.append(el('h1','h3 mb-1',recent?'最近文件':favorites?'我的收藏':'文件管理'),el('p','text-secondary small mb-0',recent?'按最近修改时间排列所有你有权访问的文件':favorites?'你收藏的文件和目录；失去访问权限后自动隐藏':'个人及团队空间 · 文件列表、网格与安全分享'));
+ const title=el('div');title.append(el('h1','h3 mb-1',recent?'最近文件':favorites?'我的收藏':personal?'个人空间':'文件管理'),el('p','text-secondary small mb-0',recent?'按最近修改时间排列所有你有权访问的文件':favorites?'你收藏的文件和目录；失去访问权限后自动隐藏':personal?'左侧展开多级目录，右侧管理当前文件夹中的文件与子文件夹':'个人及团队空间 · 文件列表、网格与安全分享'));
  const refresh=btn('↻ 刷新',()=>load(),'btn btn-sm btn-outline-primary');heading.append(title,refresh);host.append(heading);
  const message=el('div','mb-2');host.append(message);
  function note(text,kind='danger'){if(!isAlive())return;message.replaceChildren(el('div',`alert alert-${kind} py-2 small`,text));}
  const control=el('div','cd-file-toolbar panel p-3 mb-3');const first=el('div','d-flex flex-wrap gap-2 align-items-center');
- const spaceSelect=el('select','form-select form-select-sm');spaceSelect.style.maxWidth='260px';spaceSelect.setAttribute('aria-label','选择空间');
+ const spaceSelect=el('select','form-select form-select-sm');spaceSelect.style.maxWidth='260px';spaceSelect.setAttribute('aria-label',personal?'选择个人空间':'选择空间');
  if(!aggregated)first.append(spaceSelect);
  const search=el('input','form-control form-control-sm');search.type='search';search.placeholder=aggregated?'筛选当前页（全局搜索在侧栏）':'搜索当前空间中的文件';search.setAttribute('aria-label','文件搜索');search.style.maxWidth='250px';first.append(search);
  const filter=el('select','form-select form-select-sm');filter.setAttribute('aria-label','文件类型');filter.style.maxWidth='150px';
@@ -108,6 +115,7 @@ export async function renderFileManager(host,mode='files'){
   wrap.append(btn(favoriteIds.has(fileKey(item))?'★ 已收藏':'☆ 收藏',()=>toggleFavorite(item)));
   if(downloadable(item)){if(canPreview(item))wrap.append(btn('预览',()=>preview(item)));wrap.append(btn('下载',()=>download(item)));}
   wrap.append(btn('分享 / 管理',()=>share(item),'btn btn-sm btn-outline-primary'));
+  if(!aggregated&&item.kind==='folder'&&['owner','admin'].includes(currentSpace()?.membership_role))wrap.append(btn('目录权限',async()=>{try{if(await openFolderPermissions(item))note('目录权限已保存','success')}catch(err){note(err.message)};}));
   if(downloadable(item)&&canEditText(item))wrap.append(btn('在线编辑',()=>editText(item),'btn btn-sm btn-outline-primary'));
   if(downloadable(item))wrap.append(btn('历史版本',()=>viewVersions(item))); 
   wrap.append(btn('移动',()=>move(item)));
@@ -151,8 +159,8 @@ export async function renderFileManager(host,mode='files'){
    if(!aggregated&&search.value.trim())pageState.textContent='搜索结果（最多显示前 100 项）';
   }catch(err){if(run!==seq)return;itemsBox.replaceChildren();note(err.message);next.disabled=true;}
  }
- function openFolder(item){parentId=item.id;history.push(item);offset=0;search.value='';selected.clear();saveLocation();load();folderTree?.select(parentId)}
- function saveLocation(){try{if(spaceId)sessionStorage.setItem('cd-last-folder',JSON.stringify({spaceId,parentId}))}catch{}}
+ function openFolder(item){void browseFolder(item.id)}
+ function saveLocation(){try{if(spaceId)sessionStorage.setItem(explorerLocationKey(mode),JSON.stringify({spaceId,parentId,folderId:parentId}))}catch{}}
  async function browseFolder(id){parentId=id;history=[];offset=0;selected.clear();search.value='';
   if(id){try{const result=await requestJSON(`/api/v1/folders/${id}/path`);if(result.space_id!==spaceId)throw Error('空间不匹配');history=result.path;await folderTree?.expandPath(history)}catch(err){parentId=null;history=[];note(`目录不可访问，已返回根目录：${err.message}`,'warning')}}
   saveLocation();await load();folderTree?.select(parentId);
@@ -295,15 +303,15 @@ export async function renderFileManager(host,mode='files'){
   await requestJSON('/api/v1/folders',{method:'POST',body:{space_id:spaceId,parent_id:parentId,name}});await load();folderTree?.refresh();}catch(err){note(err.message)}}));}
  actions.append(selectedInfo,chooseAll,clear,batchMove,batchCopy,batchTrash);
  try{
-  if(!aggregated){const data=await requestJSON('/api/v1/spaces');if(!isAlive())return;spaceList=data.items||[];
+  if(!aggregated){const data=await requestJSON('/api/v1/spaces');if(!isAlive())return;spaceList=spacesForExplorer(data.items,mode);
    for(const s of spaceList)spaceSelect.append(option(s.id,`${s.type==='personal'?'个人':'团队'} · ${s.name}`));spaceId=spaceList[0]?.id||null;
-   if(!spaceId){itemsBox.replaceChildren(el('p','p-4 text-secondary','没有可访问的空间'));for(const b of actions.querySelectorAll('button'))b.disabled=true;return}
+   if(!spaceId){itemsBox.replaceChildren(el('p','p-4 text-secondary',personal?'尚未创建个人空间或当前账号无法访问个人空间':'没有可访问的空间'));for(const b of actions.querySelectorAll('button'))b.disabled=true;spaceSelect.disabled=true;return}
    spaceSelect.onchange=()=>{spaceId=spaceSelect.value;parentId=null;history=[];selected.clear();offset=0;search.value='';makeTree();saveLocation();load()};
    let initial=window.history.state?.cloudDriveLocation;
-   if(!initial)try{initial=JSON.parse(sessionStorage.getItem('cd-last-folder')||'null')}catch{}
+   if(!initial)try{initial=JSON.parse(sessionStorage.getItem(explorerLocationKey(mode))||'null')}catch{}
    if(initial&&spaceList.some(x=>x.id===initial.spaceId)){spaceId=initial.spaceId;spaceSelect.value=spaceId;}
    makeTree();
-   if(initial?.folderId&&initial.spaceId===spaceId)await browseFolder(initial.folderId);
+   if((initial?.folderId||initial?.parentId)&&initial.spaceId===spaceId)await browseFolder(initial.folderId||initial.parentId);
    else{parentId=null;history=[];}
    if(window.history.state?.cloudDriveLocation)window.history.replaceState({},'',location.pathname);
   }
