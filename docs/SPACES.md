@@ -1,3 +1,5 @@
+> **当前版本说明（2026-11-01）：** `/personal` 和 `/spaces` 现在都会渲染 `/api/v1/spaces/:id/contents` 返回的文件夹与文件，而非仅渲染文件夹。文件具备原生下载、支持格式的在线预览、大小和本地时间展示；详情见 [个人空间文件显示修复](RC14_12_PERSONAL_FOLDER_CONTENT_FIX.md)。本文其余部分保留早期空间阶段的历史设计说明。
+
 # 第四阶段：空间、成员、目录权限
 
 ## 模型
@@ -20,7 +22,7 @@
 | `GET /api/v1/spaces/:id/candidates?q=xx` | 按用户名检索可邀请账号（不含密码、邮箱） | 空间管理员 |
 | `PUT /api/v1/spaces/:id/members/:userId` | 添加/变更成员 `{role}` | 空间管理员 |
 | `DELETE /api/v1/spaces/:id/members/:userId` | 移除成员 | 空间管理员，不能删除 owner |
-| `GET /api/v1/spaces/:id/contents?parent_id=` | 授权目录列表（暂不提供真实文件列表） | 具有读取权限 |
+| `GET /api/v1/spaces/:id/contents?parent_id=` | 授权目录列表（同时返回文件夹 `folders` 和当前目录可读取的文件 `files`，分页加载） | 具有读取权限 |
 | `POST /api/v1/folders` | 创建文件夹 `{space_id,parent_id,name}` | 可编辑成员 |
 | `GET /api/v1/folders/:id/permissions` | 查看显式 ACL | 空间管理员 |
 | `PUT /api/v1/folders/:id/permissions` | 覆盖 ACL `{principal_type,principal_id,permission_mask}` | 空间管理员 |

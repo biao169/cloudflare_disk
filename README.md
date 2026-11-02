@@ -1,3 +1,5 @@
+> **个人空间文件夹内容修复（2026-11-01）：** `/personal` 以前只渲染 `folders`，即使目录中有文件也会误显示“暂无文件夹”。现在与 `/files` 一样同时展示 `folders` 与 `files`；支持文件名点击预览/下载、文件大小及本地时间、面包屑、多级目录、双击打开文件夹和“加载更多”。共享空间 `/spaces` 同步修复。只读取当前用户有权访问的 ready 文件，不改变后端权限或 R2/D1 数据。**无需数据库迁移或新增 Secret。** 见 [个人空间文件展示修复说明](docs/RC14_12_PERSONAL_FOLDER_CONTENT_FIX.md)。
+
 > **OneDrive 独立配置页签与匿名工具界面（RC14.12 UI 修复）：** 系统设置新增「OneDrive 配置」（`/settings?tab=onedrive`），集中管理 Microsoft OAuth / API 变量、账号授权、同步、匿名开关与解析配额；站点设置不再包含这些项。`/tools/onedrive` 未登录且允许匿名解析时只展示上方的格式解析，隐藏固定链接、直链探测和账号管理按钮。无需 D1 迁移或新 Secret。详见 [配置界面说明](docs/RC14_12_ONEDRIVE_SETTINGS_UI.md)。
 
 > **OneDrive 下载目标兼容修复（2026-10-31）：** 支持微软个人版 `my.microsoftpersonalcontent.com` 的安全下载跳转。原有 `MICROSOFT_DOWNLOAD_REDIRECT_UNTRUSTED` 可能是旧域名白名单遗漏；管理员诊断现在仅显示被拦截主机名，不暴露带 tempauth 的微软地址。详见 [下载与部署修复说明](docs/RC14_12_DOWNLOAD_DEPLOY_FIX.md)。无需 D1 迁移及重新授权。
