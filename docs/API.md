@@ -1,46 +1,42 @@
-# Stage 2 API
+# API 接口与函数用法
 
-- `GET /api/v1/health` — stage and D1 binding presence; does not imply schema migrated.
-- `GET /api/v1/system/database` — D1 connection and schema readiness, no record contents.
-- `GET /api/v1/dev/fixtures?limit=50&offset=0` — local test fixtures only, disabled by default.
-- `POST /api/v1/dev/fixtures` — local fixture create (`id`, `username`), disabled by default.
-- Other `/api/*` — 501 NOT_IMPLEMENTED.
+## 约定
 
-The dev endpoints require **both** `APP_ENV=local` and `ENABLE_LOCAL_FIXTURES=true` in `.dev.vars`. Never set either in production. They create disabled placeholder users, not credentials. Stage 3 will remove/restrict these and add actual auth.
+API 前缀为 `/api/v1`，普通请求使用 Cookie 会话认证，管理员接口要求 `super_admin`，写操作需要正确的同源/CSRF 条件。成功与失败分别采用 `{"success":true,"data":...}` 与 `{"success":false,"error":{"code":"...","message":"..."}}`。文件下载可能直接返回流或 302，不是 JSON。
 
-Response envelope: `{ "success": true, "data": ... }` or `{ "success": false, "error": {"code":"...", "message":"..."} }`. DB unavailability -> HTTP 503; invalid pagination -> 400.
+## 常用接口
 
-## RC7：文件浏览、目录选择与批量管理
+| 方法与路径 | 功能 | 访问权限 |
+| --- | --- | --- |
+| `GET /api/v1/health` | Worker 基础状态 | 公开 |
+| `GET /api/v1/health/ready` | 绑定、迁移及初始化检查 | 公开 |
+| `GET /api/v1/spaces` | 当前用户的空间 | 已登录 |
+| `GET /api/v1/spaces/{spaceId}/contents?parent_id=&offset=0&limit=50` | 当前文件夹文件与子文件夹列表 | 空间 ACL |
+| `GET /api/v1/spaces/{spaceId}/folders?parent_id=&offset=0&limit=50` | 多级文件夹导航 | 空间 ACL |
+| `GET /api/v1/files/recent` | 最近文件 | 已登录 |
+| `GET /api/v1/search/global` | 跨授权空间搜索 | 已登录 |
+| `POST /api/v1/files/batch` | 批量复制/移动 | 对象写权限 |
+| `GET /api/v1/files/{fileId}/content` | 下载文件 | 对象读权限 |
+| `GET /api/v1/files/{fileId}/preview` | 文件预览 | 对象读权限 |
+| `GET /api/v1/shares`、`POST /api/v1/shares` | 查询或创建分享 | 已登录且有权限 |
+| `GET /api/v1/shares/{id}/link` | 找回可解密的分享地址 | 分享所有者 |
+| `PATCH /api/v1/shares/{id}` | 更新分享属性 | 分享所有者 |
+| `POST /api/v1/tools/onedrive/resolve` | OneDrive 链接解析 | 取决于匿名开关/配额 |
+| `GET /api/v1/admin/onedrive/drive/items` | 浏览管理员 OneDrive | 超级管理员 |
+| `POST /api/v1/admin/onedrive/drive/publish` | 确认发布 OneDrive 文件 | 超级管理员 |
+| `GET /api/v1/admin/onedrive/drive/publications` | OneDrive 已发布列表 | 超级管理员 |
+| `GET /api/v1/admin/dashboard` | 容量与运行信息 | 超级管理员 |
+| `POST /api/v1/admin/maintenance/run` | 手动维护 | 超级管理员 |
 
-以下接口在既有 `/api/v1` 路由体系上追加，不需要修改旧分享令牌或 R2 对象 Key。
+## curl 示例
 
-- `GET /api/v1/files/recent?limit=30&cursor=` — 最近文件，跨有权访问的空间、按更新时间降序、带权限过滤和游标分页。
-- `GET /api/v1/spaces/{spaceId}/folders?parent_id=&offset=0&limit=50` — 目录选择器使用，返回 `items[].can_write`、`parent_writable`、`root_writable`、`has_more`；只有可读子目录才会出现在列表。
-- `GET /api/v1/spaces/{spaceId}/contents?parent_id=&offset=0&limit=50&sort=name_asc&filter=all` — 排序支持 `name_asc` / `name_desc` / `updated_desc` / `size_desc`；类型支持 `all` / `images` / `videos` / `documents` / `other`。
-- `POST /api/v1/files/batch`，请求体 `{ "operation":"move|copy", "file_ids":[], "folder_ids":[], "target_folder_id":null }` — 最多 20 项。目录批量移动支持；目录批量复制不支持。逐项返回 `{ id,kind,status,success,error }`。
-- `POST /api/v1/trash/batch`，请求体 `{ "items":[{"kind":"file|folder","id":"..."}] }` — 最多 20 项，逐项检查目录访问控制并返回独立结果。
-- `GET /api/v1/shares` 返回 `target_name` 以支持分享记录的正常展示，但不返回任何原始明文令牌。
+```bash
+# 无须登录：检查服务绑定、初始管理员及 D1 表状态
+curl -fsS https://your-domain.example/api/v1/health/ready
 
-所有新增接口都必须具有有效登录会话；对用户提交的文件、目录和空间 ID，后端继续执行 ACL 校验。请参见 [RC7 文件交互规格](RC7_FILE_EXPERIENCE.md)。
+# 浏览器登录后通过同源请求读取某个文件夹（占位 ID）
+# 以下只展示接口路径；具体请求必须附带有效 Cookie
+curl -b cookies.txt 'https://your-domain.example/api/v1/spaces/SPACE_UUID/contents?parent_id=&offset=0&limit=50'
+```
 
-
-## RC9 运维与备份（super_admin）
-
-- `GET /api/v1/admin/dashboard`：容量、预留、分享、维护状态和预警。
-- `GET /api/v1/admin/maintenance/runs`、`POST /api/v1/admin/maintenance/run`：历史及手动清理。
-- `GET /api/v1/admin/operations/events?page=1&limit=30`、`POST /api/v1/admin/operations/events/:id/ack`：脱敏聚合异常和确认。
-- `GET /api/v1/admin/backups/manifest`：下载元数据清单（**不能用于恢复**）。
-- `GET/POST /api/v1/admin/backups/records`：手动备份登记（不等于校验完成）。
-
-Windows 真正的 D1+R2 备份与恢复见 [RC9_OPERATIONS.md](RC9_OPERATIONS.md)。
-
-
-## RC10：再次分享和原始链接管理
-
-- `GET /api/v1/shares?target_type=file&target_id={id}` 只列当前用户创建的分享记录，不返回 bearer token。
-- `GET /api/v1/shares/{id}/link` 对活跃、过期及下载耗尽的加密链接返回原 URL；必须具有有效创建者/资源权限。
-- `PATCH /api/v1/shares/{id}` 修改有效期、密码、下载开关或下载上限，不改变分享 URL。
-- `POST /api/v1/shares` 的可选 `require_recoverable: true` 要求正确配置稳定的 `SHARE_LINK_KEY`；不满足直接失败，不创建不能恢复的记录。
-- `shares.link_origin` 在 RC10 迁移中新增，用于新链接保存创建时的域名；旧链接若未保存域名则沿用当前访问域名。
-
-详情见 [RC10_EXISTING_SHARE_LINKS.md](RC10_EXISTING_SHARE_LINKS.md)。
+不要在公开命令、截图或 issue 中包含真实 Cookie、Share Token、MS Access Token 或敏感下载地址。完整后端路由可查看 `worker/router.js` 与 `worker/api/`，OneDrive 分发在 `worker/services/`。

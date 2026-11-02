@@ -20,6 +20,34 @@ import { REQUIRED_TABLES } from '../worker/services/readiness.js';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const DEFAULT_CONFIG = join(ROOT, 'wrangler.jsonc');
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// Generated from the actual final D1 schema, not the historical migration names.
+const BASELINE = JSON.parse(readFileSync(join(ROOT, 'scripts', 'schema-baseline.json'), 'utf8'));
+const SCHEMA_COLUMNS_SQL = "SELECT m.name AS table_name, p.name AS column_name FROM sqlite_master AS m JOIN pragma_table_info(m.name) AS p WHERE m.type='table' AND m.name NOT LIKE 'sqlite_%' ORDER BY m.name,p.cid";
+const SCHEMA_OBJECTS_SQL = "SELECT type,name FROM sqlite_master WHERE type IN ('index','trigger') AND sql IS NOT NULL";
+
+export function inspectBaselineRows(columns, objects = []) {
+  const columnsByTable = new Map();
+  for (const row of columns) {
+    if (typeof row?.table_name !== 'string' || typeof row?.column_name !== 'string') continue;
+    if (!columnsByTable.has(row.table_name)) columnsByTable.set(row.table_name, new Set());
+    columnsByTable.get(row.table_name).add(row.column_name);
+  }
+  // A brand-new D1 can have only the Wrangler migrations tracking table.
+  const userTables = [...columnsByTable.keys()].filter(n => n !== 'd1_migrations' && !n.startsWith('_cf_'));
+  if (userTables.length === 0) return {empty:true, missingTables:[], missingColumns:[], missingObjects:[]};
+  const missingTables = [], missingColumns = [];
+  for (const [table, expected] of Object.entries(BASELINE.tables)) {
+    if (!columnsByTable.has(table)) {missingTables.push(table); continue;}
+    for (const column of expected) if (!columnsByTable.get(table).has(column)) missingColumns.push(`${table}.${column}`);
+  }
+  const names = new Set(objects.map(row => `${row.type}:${row.name}`));
+  const missingObjects = [
+    ...BASELINE.indexes.filter(n => !names.has(`index:${n}`)).map(n => `index:${n}`),
+    ...BASELINE.triggers.filter(n => !names.has(`trigger:${n}`)).map(n => `trigger:${n}`)
+  ];
+  return {empty:false, missingTables, missingColumns, missingObjects};
+}
+
 
 // Minimal comment stripper: leaves `//` inside quoted URLs untouched.
 export function parseJsonc(input) {
@@ -152,12 +180,34 @@ export async function deployCloudDrive({
   };
   const list = () => parseCommandJson(call(['d1', 'list', '--json'], true));
   const configArgs = ['--config', temp];
+  const metadata = () => {
+    const columns = parseCommandJson(call(['d1','execute','DB','--remote','--command',SCHEMA_COLUMNS_SQL,'--json',...configArgs],true));
+    const objects = parseCommandJson(call(['d1','execute','DB','--remote','--command',SCHEMA_OBJECTS_SQL,'--json',...configArgs],true));
+    const rows = value => (Array.isArray(value) ? value : [value]).flatMap(x => x?.results ?? []);
+    return { columns:rows(columns), objects:rows(objects) };
+  };
+  const schemaStatus = () => {
+    const {columns,objects} = metadata();
+    return inspectBaselineRows(columns,objects);
+  };
+  const failIfLegacyIncomplete = (status, stage) => {
+    if (status.empty) {
+      if (stage === 'after') throw new Error('迁移后数据库仍是空结构，停止部署。');
+      return;
+    }
+    const missing=[...status.missingTables, ...status.missingColumns, ...status.missingObjects];
+    if (missing.length) {
+      throw new Error(`现有 D1 不是完整基线结构（缺少 ${missing.slice(0,8).join(', ')}${missing.length>8?' 等':''}）。为保护历史数据已停止部署。请先使用旧版完成原有 0001–0031 迁移并备份，再切换至单文件基线；或者明确新建空 D1（旧 R2 不会自动恢复）。`);
+    }
+  };
   const verify = () => {
+    const status=schemaStatus();
+    failIfLegacyIncomplete(status,'after');
     const raw = call(['d1','execute','DB','--remote','--command',"SELECT name FROM sqlite_master WHERE type='table'",'--json',...configArgs],true);
     const tables = extractTables(parseCommandJson(raw));
     const missing = [...REQUIRED_TABLES,'d1_migrations'].filter(name => !tables.has(name));
-    if (missing.length) throw new Error(`迁移命令返回成功但 D1 仍缺少 ${missing.join(', ')}；停止发布。`);
-    logger.log(`[CloudDrive] 远程 D1 表结构已验证：${REQUIRED_TABLES.length} 个必需表和迁移记录表存在。`);
+    if (missing.length) throw new Error(`迁移后缺少 ${missing.join(', ')}；停止部署。`);
+    logger.log(`[CloudDrive] 远程 D1 完整基线验证通过：${Object.keys(BASELINE.tables).length} 张表、${BASELINE.indexes.length} 个索引及 ${BASELINE.triggers.length} 个触发器。`);
   };
   try {
     logger.log(`[CloudDrive] Worker=${original.name}; D1=${db.database_name}; mode=${mode}`);
@@ -185,6 +235,9 @@ export async function deployCloudDrive({
       call(['d1','migrations','list','DB','--remote',...configArgs]);
       return { mode, databaseName: db.database_name, databaseId: id, migrated: false };
     }
+    // Do not execute the consolidated baseline over an incomplete legacy schema:
+    // its historical 0001_initial.sql name may already be marked as applied.
+    failIfLegacyIncomplete(schemaStatus(),'before');
     call(['d1','migrations','apply','DB','--remote',...configArgs]);
     verify();
     if (mode !== 'migrate-only') {

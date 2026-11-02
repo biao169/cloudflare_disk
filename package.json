@@ -3,7 +3,7 @@
   "version": "1.0.0-rc.14.12-onedrive-sync",
   "private": true,
   "type": "module",
-  "description": "CloudDrive RC14.12: bounded OneDrive health checks, Graph Delta, diagnostics and retry scheduling",
+  "description": "CloudDrive: Cloudflare Workers file management and OneDrive sharing, consolidated D1 baseline",
   "scripts": {
     "dev": "wrangler dev --local",
     "build": "npm run check:migrations && npm run test:all",
@@ -12,13 +12,16 @@
     "test:integration": "node --test tests/integration/*.test.js",
     "test:all": "npm run check && npm test && npm run test:integration",
     "deploy": "node scripts/deploy-cloudflare.mjs",
-    "db:migrate:local": "wrangler d1 migrations apply clouddrive-db --local",
+    "db:migrate:local": "wrangler d1 migrations apply clouddrive-db --local --persist-to ./.wrangler/state",
     "db:migrate:remote": "node scripts/deploy-cloudflare.mjs --migrate-only",
     "db:migrations:list:remote": "node scripts/deploy-cloudflare.mjs --list-migrations",
     "db:backup:remote": "node scripts/deploy-cloudflare.mjs --backup-only",
     "deploy:initial": "node scripts/deploy-cloudflare.mjs --initial",
     "deploy:upgrade": "node scripts/deploy-cloudflare.mjs --upgrade",
-    "check:migrations": "node scripts/check-migrations.mjs"
+    "check:migrations": "node scripts/check-migrations.mjs",
+    "ubuntu:start": "wrangler dev --local --ip 127.0.0.1 --port 8787 --persist-to ./.wrangler/state",
+    "ubuntu:migrate": "wrangler d1 migrations apply clouddrive-db --local --persist-to ./.wrangler/state",
+    "ubuntu:check:migrations": "wrangler d1 migrations list clouddrive-db --local --persist-to ./.wrangler/state"
   },
   "devDependencies": {
     "wrangler": "^4.45.0"
